@@ -48,6 +48,18 @@ function applyChromeIdentity(): void {
   });
 }
 
+// URL 호스트 검사 도우미
+function hostEndsWith(url: string, suffix: string): boolean {
+  try { return new URL(url).hostname.endsWith(suffix); } catch { return false; }
+}
+// 일반 유튜브(유튜브뮤직 제외)인지
+function isPlainYouTube(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return h === 'www.youtube.com' || h === 'youtube.com';
+  } catch { return false; }
+}
+
 function createWindow(): void {
   const ua = CHROME_UA;
   win = new BrowserWindow({
@@ -69,6 +81,21 @@ function createWindow(): void {
     action: 'allow',
     overrideBrowserWindowOptions: { webPreferences: { partition: 'persist:main' } },
   }));
+
+  // 로그인이 팝업으로 뜬 경우: 인증이 끝나 유튜브로 넘어가면 팝업을 닫고 본 창을 새로고침해 로그인 반영
+  win.webContents.on('did-create-window', (child) => {
+    child.webContents.on('did-navigate', (_e, url) => {
+      if (hostEndsWith(url, 'youtube.com')) {
+        child.close();
+        win?.loadURL(YTM_URL);
+      }
+    });
+  });
+
+  // 로그인 후 일반 유튜브로 빠지면 유튜브뮤직으로 되돌린다 (구글 로그인 페이지는 건드리지 않음)
+  win.webContents.on('did-navigate', (_e, url) => {
+    if (isPlainYouTube(url)) win?.loadURL(YTM_URL);
+  });
 
   win.loadURL(YTM_URL, { userAgent: ua });
 
