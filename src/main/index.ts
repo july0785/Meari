@@ -17,40 +17,39 @@ let tray: Tray | null = null;
 let timer: NodeJS.Timeout | null = null;
 let quitting = false;
 
-// 일렉트론에 내장된 실제 크로미엄 메이저 버전 (예: '140')
-const CHROME_MAJOR = process.versions.chrome?.split('.')[0] ?? '140';
-
-// 일반 크롬 데스크톱과 동일한 User-Agent 문자열을 만든다.
+// 유튜브뮤직에는 일렉트론 흔적이 없는 완전한 크롬 데스크톱 UA로 위장한다.
+// 버전은 일렉트론에 내장된 실제 크로미엄 버전을 그대로 써서 모순이 없게 한다.
 function buildUserAgent(): string {
   const platform =
     process.platform === 'darwin' ? 'Macintosh; Intel Mac OS X 10_15_7'
     : process.platform === 'linux' ? 'X11; Linux x86_64'
     : 'Windows NT 10.0; Win64; x64';
-  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`;
+  const chrome = process.versions.chrome ?? '140.0.0.0';
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
 }
 
+const CHROME_UA = buildUserAgent();
+
 // 구글 로그인의 "브라우저 또는 앱이 안전하지 않을 수 있습니다" 차단 회피.
-// UA 문자열만 바꿔서는 부족하고, 클라이언트 힌트(Sec-CH-UA)에도 "Google Chrome" 브랜드를
-// 넣어 줘야 일렉트론이 아니라 일반 크롬으로 인식된다. (메인 창과 OAuth 팝업이 같은 파티션을 쓰므로 둘 다 적용됨)
+// 일반 페이지(유튜브뮤직)에는 크롬 UA로 위장하되, 구글 로그인 페이지(accounts.google.com)에는
+// 진짜 UA를 그대로 보낸다. 로그인 페이지에까지 위조 UA를 보내면 불일치로 차단되기 때문이다.
+// (검증된 방식: th-ch/youtube-music)
 function applyChromeIdentity(): void {
-  const ua = buildUserAgent();
-  app.userAgentFallback = ua;
+  const realUserAgent = app.userAgentFallback; // 덮어쓰기 전에 진짜 UA 캡처
+  app.userAgentFallback = CHROME_UA;
 
   const ses = session.fromPartition('persist:main');
-  ses.setUserAgent(ua);
+  ses.setUserAgent(CHROME_UA);
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    const headers = details.requestHeaders;
-    headers['sec-ch-ua'] =
-      `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not?A_Brand";v="99"`;
-    headers['sec-ch-ua-mobile'] = '?0';
-    headers['sec-ch-ua-platform'] =
-      process.platform === 'darwin' ? '"macOS"' : process.platform === 'linux' ? '"Linux"' : '"Windows"';
-    callback({ requestHeaders: headers });
+    if (details.url.startsWith('https://accounts.google.com')) {
+      details.requestHeaders['User-Agent'] = realUserAgent;
+    }
+    callback({ requestHeaders: details.requestHeaders });
   });
 }
 
 function createWindow(): void {
-  const ua = buildUserAgent();
+  const ua = CHROME_UA;
   win = new BrowserWindow({
     width: 1280,
     height: 800,
