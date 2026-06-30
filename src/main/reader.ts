@@ -32,6 +32,6 @@ export async function readNowPlaying(wc: WebContents): Promise<NowPlaying | null
   try {
     return await wc.executeJavaScript(READ_SCRIPT, true);
   } catch {
-    return null; // 페지 이동중 등
+    return null; // 페이지 이동 중 등
   }
 }

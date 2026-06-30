@@ -3,3 +3,6 @@ out/
 dist/
 *.log
 .DS_Store
+
+# 빌드 지시서(원본 스펙) — 저장소에는 포함하지 않음
+maeari-build-spec.md
