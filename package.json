@@ -1,0 +1,25 @@
+{
+  "name": "meari",
+  "version": "1.0.0",
+  "description": "Show the music you are listening to on Discord.",
+  "license": "MIT",
+  "author": "JULY",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "test:presence": "node test/presence-test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "electron": "^43.0.0",
+    "electron-builder": "26.13.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@xhayper/discord-rpc": "^1.3.4"
+  }
+}

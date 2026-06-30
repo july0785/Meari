@@ -1,0 +1,17 @@
+appId: dev.july.meari
+productName: 메아리
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: resources
+    to: .
+win:
+  target: [nsis, portable]
+mac:
+  target: [dmg]
+  category: public.app-category.music
+  identity: null   # 코드서명 안함(경고는 README 안내)

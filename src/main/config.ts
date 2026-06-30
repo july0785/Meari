@@ -1,0 +1,24 @@
+import { app } from 'electron';
+import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+export interface Config {
+  pollIntervalMs: number;
+  discordClientId?: string; // 비우면 constants.ts 의 기본값 사용
+}
+const DEFAULTS: Config = { pollIntervalMs: 3000 };
+
+const file = () => join(app.getPath('userData'), 'config.json');
+
+export function loadConfig(): Config {
+  try {
+    if (existsSync(file())) {
+      return { ...DEFAULTS, ...JSON.parse(readFileSync(file(), 'utf-8')) };
+    }
+  } catch { /* 기본값 */ }
+  return DEFAULTS;
+}
+
+export function saveConfig(patch: Partial<Config>): void {
+  writeFileSync(file(), JSON.stringify({ ...loadConfig(), ...patch }, null, 2));
+}
