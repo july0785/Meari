@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>메아리</title>
+  <style>
+    :root { --bar-h: 40px; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      background: #030303;
+      overflow: hidden;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    /* 제목표시줄: 유튜브뮤직 다크 톤에 맞춘 near-black */
+    #bar {
+      height: var(--bar-h);
+      display: flex;
+      align-items: center;
+      background: #0a0a0a;
+      border-bottom: 1px solid #1e1e1e;
+      -webkit-app-region: drag;   /* 빈 영역 드래그로 창 이동 */
+      user-select: none;
+    }
+    #logo {
+      height: 22px;               /* 배경 없는 흰 워드마크 로고 */
+      margin-left: 14px;
+      pointer-events: none;
+    }
+    #spacer { flex: 1; }
+    #controls {
+      display: flex;
+      height: 100%;
+      -webkit-app-region: no-drag;
+    }
+    .btn {
+      width: 46px;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: #d0d0d0;
+      cursor: pointer;
+      transition: background .12s ease;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.10); }
+    #close:hover { background: #e81123; color: #fff; }
+    .btn svg { width: 11px; height: 11px; }
+    #restoreIcon { display: none; }
+    body.maximized #maxIcon { display: none; }
+    body.maximized #restoreIcon { display: inline; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <img id="logo" alt="메아리" />
+    <div id="spacer"></div>
+    <div id="controls">
+      <button class="btn" id="min" title="최소화" aria-label="최소화">
+        <svg viewBox="0 0 10 10"><path d="M0 5 H10" stroke="currentColor" stroke-width="1"/></svg>
+      </button>
+      <button class="btn" id="max" title="최대화" aria-label="최대화">
+        <svg id="maxIcon" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor"/></svg>
+        <svg id="restoreIcon" viewBox="0 0 11 11"><rect x="0.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor"/><path d="M2.5 2.5 V0.5 H10.5 V8.5 H8.5" fill="none" stroke="currentColor"/></svg>
+      </button>
+      <button class="btn" id="close" title="닫기" aria-label="닫기">
+        <svg viewBox="0 0 10 10"><path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" stroke-width="1"/></svg>
+      </button>
+    </div>
+  </div>
+  <script>
+    const m = window.meari;
+    m.getLogo().then((u) => { if (u) document.getElementById('logo').src = u; });
+    document.getElementById('min').onclick = () => m.minimize();
+    document.getElementById('max').onclick = () => m.toggleMaximize();
+    document.getElementById('close').onclick = () => m.close();
+    m.onMaximize((v) => document.body.classList.toggle('maximized', v));
+  </script>
+</body>
+</html>
