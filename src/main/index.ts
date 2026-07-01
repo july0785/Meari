@@ -6,6 +6,10 @@ import { readNowPlaying } from './reader';
 import { initPresence, updatePresence } from './presence';
 import { loadConfig } from './config';
 
+// 일부 GPU(특히 AMD)에서 WebContentsView 합성이 깜빡이거나 안 그려지는 문제 회피.
+// 소프트웨어 합성으로 전환 — 음악 앱이라 성능 영향은 미미하다. (app.ready 전에 호출)
+app.disableHardwareAcceleration();
+
 const TITLEBAR_H = 44; // 제목표시줄 높이(px). 렌더러 CSS 의 --bar-h 와 일치해야 함.
 
 let win: BrowserWindow | null = null;
@@ -126,6 +130,7 @@ function createWindow(): void {
       partition: 'persist:main', // 로그인 유지
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false, // 트레이로 숨겨도 렌더/재생 유지
     },
   });
   view.setBackgroundColor('#0f0f0f'); // 불투명 배경 — 투명이면 페인트 누적으로 깜빡임(electron#42335)
@@ -163,7 +168,14 @@ function createWindow(): void {
   wc.loadURL(YTM_URL, { userAgent: CHROME_UA });
 
   win.on('resize', updateViewBounds);
-  win.on('show', repaintView);
+  // 트레이로 숨겼다 다시 열 때 뷰가 안 그려지는 문제: 자식 뷰를 재부착해 강제 재composite
+  win.on('show', () => {
+    if (!win || !view) return;
+    win.contentView.removeChildView(view);
+    win.contentView.addChildView(view);
+    updateViewBounds();
+    setTimeout(() => view?.webContents.invalidate(), 60);
+  });
   win.on('maximize', () => win?.webContents.send('meari:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('meari:maximized', false));
 
