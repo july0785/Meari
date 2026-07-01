@@ -6,7 +6,7 @@ import { readNowPlaying } from './reader';
 import { initPresence, updatePresence } from './presence';
 import { loadConfig } from './config';
 
-const TITLEBAR_H = 40; // 제목표시줄 높이(px). 렌더러 CSS 의 --bar-h 와 일치해야 함.
+const TITLEBAR_H = 44; // 제목표시줄 높이(px). 렌더러 CSS 의 --bar-h 와 일치해야 함.
 
 let win: BrowserWindow | null = null;
 let view: WebContentsView | null = null;
@@ -114,6 +114,7 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+  view.setBackgroundColor('#0f0f0f'); // 불투명 배경 — 투명이면 페인트 누적으로 깜빡임(electron#42335)
   win.contentView.addChildView(view);
   updateViewBounds();
 
