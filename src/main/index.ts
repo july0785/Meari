@@ -67,9 +67,10 @@ function isPlainYouTube(url: string): boolean {
 // ---- 제목표시줄용 로고(투명 흰 워드마크)를 data URL 로 읽는다 ----
 function logoDataUrl(): string {
   const candidates = [
-    join(process.resourcesPath, 'discord-logo.png'),          // 패키지본(extraResources)
-    join(app.getAppPath(), 'resources', 'discord-logo.png'),  // 개발
-    join(__dirname, '../../resources/discord-logo.png'),
+    join(process.resourcesPath, 'logo-titlebar.png'),          // 여백 잘라낸 제목표시줄용(패키지본)
+    join(app.getAppPath(), 'resources', 'logo-titlebar.png'),  // 개발
+    join(__dirname, '../../resources/logo-titlebar.png'),
+    join(process.resourcesPath, 'discord-logo.png'),           // 대체
   ];
   for (const p of candidates) {
     try {
@@ -83,6 +84,19 @@ function updateViewBounds(): void {
   if (!win || !view) return;
   const [w, h] = win.getContentSize();
   view.setBounds({ x: 0, y: TITLEBAR_H, width: w, height: Math.max(0, h - TITLEBAR_H) });
+}
+
+// WebContentsView 가 첫 페인트를 건너뛰는 증상(electron#42335) 대비:
+// 바운즈를 1px 흔들었다 되돌리고 강제 리페인트해 그리기를 깨운다.
+function repaintView(): void {
+  if (!win || !view) return;
+  const [w, h] = win.getContentSize();
+  view.setBounds({ x: 0, y: TITLEBAR_H, width: w, height: Math.max(0, h - TITLEBAR_H - 1) });
+  setTimeout(() => {
+    if (!win || !view) return;
+    updateViewBounds();
+    view.webContents.invalidate();
+  }, 50);
 }
 
 function createWindow(): void {
@@ -142,9 +156,14 @@ function createWindow(): void {
     if (isPlainYouTube(url)) wc.loadURL(YTM_URL);
   });
 
+  // 첫 페인트 누락 대비: 로드/표시 시점마다 리페인트를 깨운다
+  wc.on('did-finish-load', repaintView);
+  wc.on('did-stop-loading', repaintView);
+
   wc.loadURL(YTM_URL, { userAgent: CHROME_UA });
 
   win.on('resize', updateViewBounds);
+  win.on('show', repaintView);
   win.on('maximize', () => win?.webContents.send('meari:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('meari:maximized', false));
 
