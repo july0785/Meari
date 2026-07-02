@@ -189,30 +189,41 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
         ? { key: BADGE_REPEAT, text: '반복 중' }
         : null;
 
-  const activity = {
+  // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
+  // 원시 SET_ACTIVITY 요청을 직접 보낸다.
+  const assets: Record<string, string> = {
+    large_image: coverImage(np.cover) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
+  };
+  // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
+  if (np.album) assets.large_text = pad2(np.album.slice(0, 128));
+  if (badge) { assets.small_image = badge.key; assets.small_text = badge.text; }
+
+  const activity: Record<string, unknown> = {
     // 재생 중: Listening("듣는 중"). 일시정지: 일반 활동으로 전환 —
     // "듣는 중" 카드가 강제로 그리는 ♫ 0:00 시간 줄이 사라진다.
     type: np.paused ? 0 : 2,
     details: title,
     state,
-    largeImageKey: coverImage(np.cover) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
-    // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
-    largeImageText: np.album ? pad2(np.album.slice(0, 128)) : undefined,
-    smallImageKey: badge?.key,
-    smallImageText: badge?.text,
-    // 진행 바(타임스탬프)는 재생 중일 때만. 일시정지 중엔 위의 state 글자가 위치를 보여 준다.
-    startTimestamp: np.paused ? undefined : start,
-    endTimestamp: (!np.paused && hasDuration)
-      ? Math.floor(now + (np.duration - np.elapsed) * 1000)
-      : undefined,
+    // 상태줄(멤버 목록 등)에 앱 이름 대신 details(곡 제목)를 표시 (0=앱이름, 1=state, 2=details)
+    status_display_type: 2,
+    assets,
   };
+  // 진행 바(타임스탬프)는 재생 중일 때만. 일시정지 중엔 위의 state 글자가 위치를 보여 준다.
+  if (!np.paused) {
+    activity.timestamps = hasDuration
+      ? { start, end: Math.floor(now + (np.duration - np.elapsed) * 1000) }
+      : { start };
+  }
+
+  const send = (a: Record<string, unknown>) =>
+    client!.request('SET_ACTIVITY', { pid: process.pid, activity: a });
 
   try {
-    await client.user.setActivity(activity);
+    await send(activity);
   } catch {
     // 커버 URL 문제일 수 있으니 앱 로고로 1회 재시도
     try {
-      await client.user.setActivity({ ...activity, largeImageKey: COVER_FALLBACK });
+      await send({ ...activity, assets: { ...assets, large_image: COVER_FALLBACK } });
     } catch {
       // 그래도 실패 → 상태를 되돌려 다음 폴링에서 다시 시도 (이전 곡에 멈추는 것 방지)
       lastTrack = '';
