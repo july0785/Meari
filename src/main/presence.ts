@@ -7,6 +7,7 @@ let ready = false;
 let lastTrack = '';
 let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치 어긋남 감지용.
 let lastPaused = false;
+let lastSentAt = 0;   // 마지막 전송 시각(ms). 일시정지 중 진행바 고정 갱신 주기용.
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
 
 export async function initPresence(clientId: string): Promise<void> {
@@ -120,6 +121,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       lastTrack = '';
       lastStart = 0;
       lastPaused = false;
+      lastSentAt = 0;
       await client.user.clearActivity().catch(() => {});
     }
     return;
@@ -136,10 +138,14 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   const trackChanged = track !== lastTrack;
   const pausedChanged = np.paused !== lastPaused;
   const drifted = !np.paused && Math.abs(start - lastStart) > 5000;
-  if (!trackChanged && !pausedChanged && !drifted) return;
+  // 일시정지 중에는 디스코드가 바를 계속 굴리므로, 주기적으로 멈춘 위치를
+  // 다시 보내 바를 그 자리에 고정한다. (속도제한 5회/20초를 넘지 않게 6초 간격)
+  const pausedRefresh = np.paused && now - lastSentAt >= 6000;
+  if (!trackChanged && !pausedChanged && !drifted && !pausedRefresh) return;
 
   lastTrack = track;
   lastPaused = np.paused;
+  lastSentAt = now;
   if (!np.paused) lastStart = start;
 
   // 디스코드는 details/state 가 2자 미만이면 거부한다 → 짧으면 여백으로 채움
@@ -156,9 +162,10 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
     largeImageText: pad2((np.album || np.title).slice(0, 128)),
     smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
     smallImageText: np.paused ? '일시정지' : undefined,
-    // 재생 중일 때만 진행 바(타임스탬프). 일시정지 땐 곡만 보여 주고 바는 멈춘다.
-    startTimestamp: np.paused ? undefined : start,
-    endTimestamp: (!np.paused && hasDuration)
+    // 진행 바는 항상 표시. 일시정지 중에는 elapsed 가 변하지 않으므로
+    // 위의 주기적 재전송(pausedRefresh)이 바를 멈춘 위치에 붙들어 둔다.
+    startTimestamp: start,
+    endTimestamp: hasDuration
       ? Math.floor(now + (np.duration - np.elapsed) * 1000)
       : undefined,
   };
@@ -173,6 +180,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       // 그래도 실패 → 상태를 되돌려 다음 폴링에서 다시 시도 (이전 곡에 멈추는 것 방지)
       lastTrack = '';
       lastStart = 0;
+      lastSentAt = 0;
     }
   }
 }
