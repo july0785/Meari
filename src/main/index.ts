@@ -218,18 +218,25 @@ function createWindow(): void {
 
   win.on('resize', updateViewBounds);
 
-  // 트레이 복원 시 검은 화면 방지: 숨길 때 뷰 표시를 꺼서 합성기를 정리하고,
-  // 다시 보일 때 켜서 새로 합성하게 한다. (재생 중인 음악은 끊기지 않는다)
+  // 트레이 복원 시 검은 화면 방지 + 빠른 복원:
+  // 숨긴 "직후" 뷰 표시를 껐다 곧바로 켜서, 창이 안 보이는 동안 낡은 합성 표면을
+  // 버리고 새 표면을 미리 만들어 둔다. 다시 열 때는 완성된 화면이 즉시 나온다.
+  const refreshHiddenView = () => {
+    if (!view) return;
+    view.setVisible(false);
+    setTimeout(() => { view?.setVisible(true); view?.webContents.invalidate(); }, 150);
+  };
+  win.on('hide', refreshHiddenView);
+  win.on('minimize', refreshHiddenView);
+
   const wakeView = () => {
     if (!view) return;
-    view.setVisible(true);
+    view.setVisible(true); // 안전망 — 숨김 직후 재생성이 아직 안 끝났을 때 대비
     updateViewBounds();
     setTimeout(() => view?.webContents.invalidate(), 60);
   };
   win.on('show', wakeView);
   win.on('restore', wakeView);
-  win.on('hide', () => view?.setVisible(false));
-  win.on('minimize', () => view?.setVisible(false));
 
   win.on('maximize', () => win?.webContents.send('meari:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('meari:maximized', false));

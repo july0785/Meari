@@ -35,6 +35,13 @@ const READ_SCRIPT = `(() => {
     ? m.artwork[m.artwork.length - 1].src
     : null;
 
+  // 제목은 플레이어 바에 실제로 보이는 것을 우선 사용.
+  // mediaSession 제목은 표시 제목과 달리 영문으로 표준화된 트랙명일 때가 있어
+  // 원제목(일본어 등)이 유실된다. 플레이어 바가 비어 있으면 mediaSession 으로 폴백.
+  const bar = document.querySelector('yt-formatted-string.title.ytmusic-player-bar')
+    || document.querySelector('.title.ytmusic-player-bar');
+  const title = (bar && bar.textContent && bar.textContent.trim()) || m.title || '';
+
   let elapsed, duration;
   const p = window.__meariPos;
   // 보고값이 10초 넘게 갱신되지 않았다면(일부 곡에서 setPositionState 를 안 부름) 신뢰하지 않는다
@@ -50,7 +57,7 @@ const READ_SCRIPT = `(() => {
   }
 
   return {
-    title: m.title || '',
+    title: title,
     artist: m.artist || '',
     album: m.album || '',
     cover: art,

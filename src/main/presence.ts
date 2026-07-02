@@ -47,10 +47,15 @@ function cleanTitle(raw: string, artist: string): string {
     ' ',
   );
 
-  // 외국어 병기 괄호 제거: 괄호 밖에 한글이 있는데 괄호 안에 한글이 없으면
-  // 병기(예: 초계반(アスノヨゾラ哨戒班), 아카네 리제(Akane Lize))로 간주한다.
-  if (/[가-힣]/.test(t.replace(/[(（][^)）]*[)）]/g, ''))) {
+  // 외국어 병기 괄호 제거: 본문 문자와 "다른" 문자만 담긴 괄호는 병기로 간주.
+  // 한글 본문 → 한글 없는 괄호 제거 (예: 초계반(アスノヨゾラ哨戒班), 아카네 리제(Akane Lize))
+  // 일본어 본문 → CJK 없는(라틴) 괄호 제거 (예: 瞬間、シンフォニー。(A Symphony of Moments))
+  const JP = /[぀-ヿ一-鿿]/; // 가나 + 한자
+  const outside = t.replace(/[(（][^)）]*[)）]/g, '');
+  if (/[가-힣]/.test(outside)) {
     t = t.replace(/\s*[(（]([^)）]*)[)）]/g, (m, inner) => (/[가-힣]/.test(inner) ? m : ' '));
+  } else if (JP.test(outside)) {
+    t = t.replace(/\s*[(（]([^)）]*)[)）]/g, (m, inner) => (/[가-힣]/.test(inner) || JP.test(inner) ? m : ' '));
   }
 
   // 구분자로 나눠 불필요한 조각 제거 (확신 있는 것만):
@@ -69,9 +74,15 @@ function cleanTitle(raw: string, artist: string): string {
       });
       if (noArtist.length > 0) kept = noArtist;
     }
-    if (kept.length > 1 && kept.some((p) => /[가-힣]/.test(p))) {
-      const hangulOnly = kept.filter((p) => /[가-힣]/.test(p));
-      if (hangulOnly.length > 0) kept = hangulOnly;
+    // 원문(한글/일본어) 조각이 있으면, 그 문자가 전혀 없는 조각(영문 번역 꼬리)은 버린다
+    if (kept.length > 1) {
+      if (kept.some((p) => /[가-힣]/.test(p))) {
+        const orig = kept.filter((p) => /[가-힣]/.test(p));
+        if (orig.length > 0) kept = orig;
+      } else if (kept.some((p) => JP.test(p))) {
+        const orig = kept.filter((p) => JP.test(p));
+        if (orig.length > 0) kept = orig;
+      }
     }
     if (kept.length > 0 && kept.length < parts.length) t = kept.join(' - ');
   }
