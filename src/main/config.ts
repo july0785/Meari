@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 export interface Config {
   pollIntervalMs: number;
   discordClientId?: string; // 비우면 constants.ts 의 기본값 사용
+  disableGpu?: boolean;     // 화면이 깜빡이는 환경에서만 true (CPU 사용량이 크게 늘어남)
 }
 const DEFAULTS: Config = { pollIntervalMs: 3000 };
 

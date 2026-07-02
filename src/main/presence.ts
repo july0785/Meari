@@ -27,15 +27,51 @@ function scheduleReconnect(): void {
 }
 
 // 유튜브 제목에서 거추장스러운 부분을 덜어 진짜 제목만 남긴다(최선의 추정).
-function cleanTitle(raw: string): string {
-  let t = (raw || '').trim();
-  t = t.replace(/^(\s*\[[^\]]*\]\s*)+/, '');                       // 앞쪽 [태그] 제거
+// 핵심 원칙: 무엇을 지울지 확신이 없으면 남긴다. 구분자로 나눈 조각은
+// "가수명과 겹칠 때만" 지워서, 곡명이 잘려 나가는 사고를 막는다.
+function cleanTitle(raw: string, artist: string): string {
+  const original = (raw || '').trim();
+  let t = original;
+
+  // [태그]·【태그】 제거 (앞쪽 연속 태그 + 어디에 있든 【COVER】【MV】 류)
+  t = t.replace(/^(\s*[[【][^\]】]*[\]】]\s*)+/, '');
+  t = t.replace(/【[^】]*】/g, ' ');
+
+  // (Official Video) (MV) (가사) 류 잡음 괄호 제거
   t = t.replace(
-    /\s*[([]\s*(official[^)\]]*|m\/?v|mv|audio|lyrics?(\s*video)?|visualizer|가사|뮤직비디오|hd|4k|8k)\s*[)\]]\s*$/i,
-    '',                                                            // 뒤쪽 (Official Video) 류 잡음 제거
+    /\s*[([]\s*(official[^)\]]*|m\/?v|mv|audio|lyrics?(\s*video)?|visualizer|가사|뮤직비디오|커버|cover|hd|4k|8k)\s*[)\]]/gi,
+    ' ',
   );
-  t = t.replace(/\s+[-–—|｜]\s+.*$/, '');                          // " - 번역/부제", " | 설명" 꼬리 제거
-  return t.trim() || (raw || '').trim();
+
+  // 외국어 병기 괄호 제거: 괄호 밖에 한글이 있는데 괄호 안에 한글이 없으면
+  // 병기(예: 초계반(アスノヨゾラ哨戒班), 아카네 리제(Akane Lize))로 간주한다.
+  if (/[가-힣]/.test(t.replace(/[(（][^)）]*[)）]/g, ''))) {
+    t = t.replace(/\s*[(（]([^)）]*)[)）]/g, (m, inner) => (/[가-힣]/.test(inner) ? m : ' '));
+  }
+
+  // 구분자로 나눠 불필요한 조각 제거 (확신 있는 것만):
+  // ① 가수명과 겹치는 조각, ② 한글 조각이 있을 때 한글이 전혀 없는 조각(영문 번역 꼬리)
+  const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, '');
+  const a = norm(artist || '');
+  const parts = t.split(/\s*[|｜❘丨]\s*|\s+[-–—]\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length > 1) {
+    let kept = parts;
+    if (a.length >= 2) {
+      const noArtist = kept.filter((p) => {
+        const np = norm(p);
+        return !(np.length >= 2 && (a.includes(np) || np.includes(a)));
+      });
+      if (noArtist.length > 0) kept = noArtist;
+    }
+    if (kept.length > 1 && kept.some((p) => /[가-힣]/.test(p))) {
+      const hangulOnly = kept.filter((p) => /[가-힣]/.test(p));
+      if (hangulOnly.length > 0) kept = hangulOnly;
+    }
+    if (kept.length > 0 && kept.length < parts.length) t = kept.join(' - ');
+  }
+
+  t = t.replace(/\s{2,}/g, ' ').trim();
+  return t || original;
 }
 
 // 디스코드 largeImageKey 는 최대 256자. 넘으면 setActivity 전체가 실패하므로 반드시 지킨다.
@@ -91,7 +127,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
 
   // 디스코드는 details/state 가 2자 미만이면 거부한다 → 짧으면 여백으로 채움
   const pad2 = (s: string): string => (s.length < 2 ? (s + '  ').slice(0, 2) : s);
-  const title = pad2(cleanTitle(np.title).slice(0, 128));
+  const title = pad2(cleanTitle(np.title, np.artist).slice(0, 128));
   const artist = pad2((np.artist || 'YouTube Music').slice(0, 128));
 
   const activity = {
@@ -99,7 +135,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
     details: title,
     state: artist,
     largeImageKey: coverImage(np.cover) ?? 'logo', // 정사각 보정된 URL; 없으면 업로드자산 'logo'
-    largeImageText: pad2((np.album || cleanTitle(np.title)).slice(0, 128)),
+    largeImageText: pad2((np.album || cleanTitle(np.title, np.artist)).slice(0, 128)),
     smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
     smallImageText: np.paused ? '일시정지' : undefined,
     // 재생 중일 때만 진행 바(타임스탬프). 일시정지 땐 곡만 보여 주고 바는 멈춘다.

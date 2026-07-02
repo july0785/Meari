@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, session, ipcMain } from 'electron';
+import { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, session, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { YTM_URL, DISCORD_CLIENT_ID } from './constants';
@@ -6,9 +6,25 @@ import { readNowPlaying } from './reader';
 import { initPresence, updatePresence } from './presence';
 import { loadConfig } from './config';
 
-// 일부 GPU(특히 AMD)에서 WebContentsView 합성이 깜빡이거나 안 그려지는 문제 회피.
-// 소프트웨어 합성으로 전환 — 음악 앱이라 성능 영향은 미미하다. (app.ready 전에 호출)
-app.disableHardwareAcceleration();
+// 윈도우의 "가려진 창 감지"가 숨긴 창의 렌더링을 얼려 버리고, 트레이에서 복원할 때
+// 깨어나지 못해 검은 화면·연속 다시그리기가 생긴다 → 감지 자체를 끈다. (알려진 Electron 버그의 정석 대응)
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
+// GPU 가속은 기본 사용 — 끄면 영상 디코딩·합성을 전부 CPU 가 떠안아 사용량이 치솟는다.
+// 화면이 깜빡이는 환경에서만 config.json 에 "disableGpu": true 를 넣어 소프트웨어 합성으로 전환.
+if (loadConfig().disableGpu) app.disableHardwareAcceleration();
+
+// 중복 실행 방지: 두 번째 인스턴스는 종료하고 기존 창을 앞으로 가져온다
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
 
 const TITLEBAR_H = 44; // 제목표시줄 높이(px). 렌더러 CSS 의 --bar-h 와 일치해야 함.
 
@@ -54,6 +70,12 @@ function applyChromeIdentity(): void {
     }
     callback({ requestHeaders: details.requestHeaders });
   });
+
+  // 웹페이지의 권한 요청(위치·알림·마이크 등)은 기본 거부.
+  // 전체화면과 DRM(mediaKeySystem)만 재생에 필요할 수 있어 허용한다.
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'fullscreen' || permission === 'mediaKeySystem');
+  });
 }
 
 // ---- URL 도우미 ----
@@ -66,6 +88,18 @@ function isPlainYouTube(url: string): boolean {
     const h = new URL(url).hostname;
     return h === 'www.youtube.com' || h === 'youtube.com';
   } catch { return false; }
+}
+// 앱 안에서 열어도 되는 신뢰 도메인(유튜브·구글 로그인 계열)인지.
+// 그 외 링크는 앱(로그인 세션을 가진) 안이 아니라 기본 브라우저로 연다.
+function isTrustedDomain(url: string): boolean {
+  return (
+    hostEndsWith(url, 'youtube.com') ||
+    hostEndsWith(url, 'youtube-nocookie.com') ||
+    hostEndsWith(url, 'google.com') ||
+    hostEndsWith(url, 'google.co.kr') ||
+    hostEndsWith(url, 'googleusercontent.com') ||
+    hostEndsWith(url, 'gstatic.com')
+  );
 }
 
 // ---- 제목표시줄용 로고(투명 흰 워드마크)를 data URL 로 읽는다 ----
@@ -130,7 +164,8 @@ function createWindow(): void {
       partition: 'persist:main', // 로그인 유지
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false, // 트레이로 숨겨도 렌더/재생 유지
+      // backgroundThrottling 은 기본값(true) 사용: 숨겨진 동안 타이머만 느려질 뿐
+      // 음악 재생은 영향받지 않고, CPU 를 아낀다.
     },
   });
   view.setBackgroundColor('#0f0f0f'); // 불투명 배경 — 투명이면 페인트 누적으로 깜빡임(electron#42335)
@@ -140,11 +175,25 @@ function createWindow(): void {
   const wc = view.webContents;
   wc.setUserAgent(CHROME_UA);
 
-  // 구글 OAuth 팝업 허용 + 같은 세션
-  wc.setWindowOpenHandler(() => ({
-    action: 'allow',
-    overrideBrowserWindowOptions: { webPreferences: { partition: 'persist:main' } },
-  }));
+  // 팝업: 신뢰 도메인(구글 OAuth 등)만 앱 안에서 허용, 그 외는 기본 브라우저로
+  wc.setWindowOpenHandler(({ url }) => {
+    if (isTrustedDomain(url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: { webPreferences: { partition: 'persist:main' } },
+      };
+    }
+    shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+
+  // 본 뷰의 페이지 이동도 신뢰 도메인으로 제한 — 외부 사이트는 기본 브라우저로
+  wc.on('will-navigate', (e, url) => {
+    if (!isTrustedDomain(url)) {
+      e.preventDefault();
+      shell.openExternal(url).catch(() => {});
+    }
+  });
 
   // 로그인이 팝업으로 뜬 경우: 인증이 끝나 유튜브로 넘어가면 팝업을 닫고 뷰를 새로고침해 로그인 반영
   wc.on('did-create-window', (child) => {
@@ -168,30 +217,25 @@ function createWindow(): void {
   wc.loadURL(YTM_URL, { userAgent: CHROME_UA });
 
   win.on('resize', updateViewBounds);
-  // 트레이로 숨겼다 다시 열 때 뷰가 안 그려지는 문제:
-  // 자식 뷰 재부착 + 창 크기를 1px 흔들어 창 전체를 강제 재합성시킨다.
-  const wakeWindow = () => {
-    if (!win || !view) return;
-    win.contentView.removeChildView(view);
-    win.contentView.addChildView(view);
+
+  // 트레이 복원 시 검은 화면 방지: 숨길 때 뷰 표시를 꺼서 합성기를 정리하고,
+  // 다시 보일 때 켜서 새로 합성하게 한다. (재생 중인 음악은 끊기지 않는다)
+  const wakeView = () => {
+    if (!view) return;
+    view.setVisible(true);
     updateViewBounds();
-    setTimeout(() => {
-      if (!win || !view) return;
-      const b = win.getBounds();
-      win.setBounds({ x: b.x, y: b.y, width: b.width + 1, height: b.height });
-      win.setBounds(b);
-      updateViewBounds();
-      view.webContents.invalidate();
-      win.webContents.invalidate();
-    }, 60);
+    setTimeout(() => view?.webContents.invalidate(), 60);
   };
-  win.on('show', wakeWindow);
-  win.on('restore', wakeWindow);
+  win.on('show', wakeView);
+  win.on('restore', wakeView);
+  win.on('hide', () => view?.setVisible(false));
+  win.on('minimize', () => view?.setVisible(false));
+
   win.on('maximize', () => win?.webContents.send('meari:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('meari:maximized', false));
 
   win.on('close', (e) => {
-    if (!quitting) { e.preventDefault(); win?.hide(); } // 닫기 → 트레이로
+    if (!quitting) { e.preventDefault(); win?.hide(); } // 닫기 → 트레이로 (hide 이벤트가 뷰를 정리)
   });
 }
 
