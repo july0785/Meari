@@ -8,6 +8,14 @@ let lastTrack = '';
 let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치 어긋남 감지용.
 let lastPaused = false;
 let lastElapsed = 0;  // 마지막 전송 시점의 재생위치(초). 일시정지 중 탐색 감지용.
+let lastRepeat = '';  // 마지막 전송 시점의 반복 모드. 뱃지 갱신 감지용.
+
+// 저장소에 올려 둔 상태 뱃지 아이콘 (공개 https 라 디스코드가 그대로 가져간다)
+const ICON_BASE = 'https://raw.githubusercontent.com/july0785/Meari/main/resources';
+const COVER_FALLBACK = `${ICON_BASE}/icon.png`;       // 앨범 이미지가 없을 때
+const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png`;
+const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png`;
+const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png`;
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
 
 export async function initPresence(clientId: string): Promise<void> {
@@ -122,6 +130,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       lastStart = 0;
       lastPaused = false;
       lastElapsed = 0;
+      lastRepeat = '';
       await client.user.clearActivity().catch(() => {});
     }
     return;
@@ -140,11 +149,13 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   const drifted = !np.paused && Math.abs(start - lastStart) > 5000;
   // 일시정지 중 탐색(위치 이동)하면 표시 중인 멈춘 위치 글자를 갱신
   const pausedSeeked = np.paused && Math.abs(np.elapsed - lastElapsed) > 3;
-  if (!trackChanged && !pausedChanged && !drifted && !pausedSeeked) return;
+  const repeatChanged = np.repeat !== lastRepeat;
+  if (!trackChanged && !pausedChanged && !drifted && !pausedSeeked && !repeatChanged) return;
 
   lastTrack = track;
   lastPaused = np.paused;
   lastElapsed = np.elapsed;
+  lastRepeat = np.repeat;
   if (!np.paused) lastStart = start;
 
   // 디스코드는 details/state 가 2자 미만이면 거부한다 → 짧으면 여백으로 채움
@@ -169,15 +180,26 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       ).slice(0, 128)
     : artist;
 
+  // 상태 뱃지(앨범아트 구석의 작은 원형 아이콘): 일시정지 > 한 곡 반복 > 반복
+  const badge = np.paused
+    ? { key: BADGE_PAUSE, text: '일시정지' }
+    : np.repeat === 'ONE'
+      ? { key: BADGE_REPEAT_ONE, text: '한 곡 반복 중' }
+      : np.repeat === 'ALL'
+        ? { key: BADGE_REPEAT, text: '반복 중' }
+        : null;
+
   const activity = {
-    type: 2, // Listening — 디스코드 판본에 따라 'Playing' 으로 보일 수 있음(정상)
+    // 재생 중: Listening("듣는 중"). 일시정지: 일반 활동으로 전환 —
+    // "듣는 중" 카드가 강제로 그리는 ♫ 0:00 시간 줄이 사라진다.
+    type: np.paused ? 0 : 2,
     details: title,
     state,
-    largeImageKey: coverImage(np.cover) ?? 'logo', // 정사각 보정된 URL; 없으면 업로드자산 'logo'
+    largeImageKey: coverImage(np.cover) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
     // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
     largeImageText: np.album ? pad2(np.album.slice(0, 128)) : undefined,
-    smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
-    smallImageText: np.paused ? '일시정지' : undefined,
+    smallImageKey: badge?.key,
+    smallImageText: badge?.text,
     // 진행 바(타임스탬프)는 재생 중일 때만. 일시정지 중엔 위의 state 글자가 위치를 보여 준다.
     startTimestamp: np.paused ? undefined : start,
     endTimestamp: (!np.paused && hasDuration)
@@ -188,14 +210,15 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   try {
     await client.user.setActivity(activity);
   } catch {
-    // 커버 URL 문제일 수 있으니 업로드 자산(logo)으로 1회 재시도
+    // 커버 URL 문제일 수 있으니 앱 로고로 1회 재시도
     try {
-      await client.user.setActivity({ ...activity, largeImageKey: 'logo' });
+      await client.user.setActivity({ ...activity, largeImageKey: COVER_FALLBACK });
     } catch {
       // 그래도 실패 → 상태를 되돌려 다음 폴링에서 다시 시도 (이전 곡에 멈추는 것 방지)
       lastTrack = '';
       lastStart = 0;
       lastElapsed = 0;
+      lastRepeat = '';
     }
   }
 }

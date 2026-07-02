@@ -8,6 +8,7 @@ export interface NowPlaying {
   elapsed: number;
   duration: number;
   paused: boolean;
+  repeat: string; // '' | 'NONE' | 'ALL' | 'ONE' (유튜브뮤직 플레이어 바의 repeat-mode)
 }
 
 const READ_SCRIPT = `(() => {
@@ -42,6 +43,10 @@ const READ_SCRIPT = `(() => {
     || document.querySelector('.title.ytmusic-player-bar');
   const title = (bar && bar.textContent && bar.textContent.trim()) || m.title || '';
 
+  // 반복 모드 (NONE / ALL / ONE) — 속성이 없으면 빈 문자열로 안전하게
+  const playerBar = document.querySelector('ytmusic-player-bar');
+  const repeat = (playerBar && playerBar.getAttribute('repeat-mode')) || '';
+
   let elapsed, duration;
   const p = window.__meariPos;
   if (v.paused) {
@@ -68,7 +73,8 @@ const READ_SCRIPT = `(() => {
     cover: art,
     elapsed: elapsed,
     duration: duration,
-    paused: v.paused
+    paused: v.paused,
+    repeat: repeat
   };
 })()`;
 
