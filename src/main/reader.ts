@@ -44,11 +44,16 @@ const READ_SCRIPT = `(() => {
 
   let elapsed, duration;
   const p = window.__meariPos;
-  // 보고값이 10초 넘게 갱신되지 않았다면(일부 곡에서 setPositionState 를 안 부름) 신뢰하지 않는다
-  const fresh = p && p.duration && (v.paused || Date.now() - p.at < 10000);
-  if (fresh) {
+  if (v.paused) {
+    // 일시정지 중에는 video.currentTime 이 정확한 멈춘 위치다.
+    // (setPositionState 보고값은 일시정지 중 탐색을 반영하지 않아 낡을 수 있음)
+    elapsed = v.currentTime || 0;
+    duration = v.duration || (p && p.duration) || 0;
+  } else if (p && p.duration && Date.now() - p.at < 10000) {
+    // 재생 중에는 최신 보고값 기반 외삽이 곡 전환 직후에도 정확하다.
+    // 보고값이 10초 넘게 갱신되지 않았다면(일부 곡에서 안 부름) 신뢰하지 않는다.
     duration = p.duration;
-    elapsed = v.paused ? p.position : p.position + (Date.now() - p.at) / 1000 * p.rate;
+    elapsed = p.position + (Date.now() - p.at) / 1000 * p.rate;
     if (elapsed < 0) elapsed = 0;
     if (elapsed > duration) elapsed = duration;
   } else {
