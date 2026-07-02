@@ -200,9 +200,9 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   if (badge) { assets.small_image = badge.key; assets.small_text = badge.text; }
 
   const activity: Record<string, unknown> = {
-    // 재생 중: Listening("듣는 중"). 일시정지: 일반 활동으로 전환 —
-    // "듣는 중" 카드가 강제로 그리는 ♫ 0:00 시간 줄이 사라진다.
-    type: np.paused ? 0 : 2,
+    // 항상 Listening("듣는 중") 유지. 일시정지 때 일반 활동으로 바꾸면 ♫ 0:00 줄은
+    // 사라지지만 헤더가 "하는 중"으로 바뀌어 더 어색하다(사용자 결정: 듣는 중 고정).
+    type: 2,
     details: title,
     state,
     // 상태줄(멤버 목록 등)에 앱 이름 대신 details(곡 제목)를 표시 (0=앱이름, 1=state, 2=details)
