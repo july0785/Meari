@@ -174,8 +174,8 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
     details: title,
     state,
     largeImageKey: coverImage(np.cover) ?? 'logo', // 정사각 보정된 URL; 없으면 업로드자산 'logo'
-    // 호버 텍스트에는 원제목을 보존 — 제목 정리가 과했더라도 전체 정보가 남는다
-    largeImageText: pad2((np.album || np.title).slice(0, 128)),
+    // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
+    largeImageText: np.album ? pad2(np.album.slice(0, 128)) : undefined,
     smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
     smallImageText: np.paused ? '일시정지' : undefined,
     // 진행 바(타임스탬프)는 재생 중일 때만. 일시정지 중엔 위의 state 글자가 위치를 보여 준다.
