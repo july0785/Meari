@@ -37,7 +37,9 @@ const READ_SCRIPT = `(() => {
 
   let elapsed, duration;
   const p = window.__meariPos;
-  if (p && p.duration) {
+  // 보고값이 10초 넘게 갱신되지 않았다면(일부 곡에서 setPositionState 를 안 부름) 신뢰하지 않는다
+  const fresh = p && p.duration && (v.paused || Date.now() - p.at < 10000);
+  if (fresh) {
     duration = p.duration;
     elapsed = v.paused ? p.position : p.position + (Date.now() - p.at) / 1000 * p.rate;
     if (elapsed < 0) elapsed = 0;

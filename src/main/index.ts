@@ -168,14 +168,25 @@ function createWindow(): void {
   wc.loadURL(YTM_URL, { userAgent: CHROME_UA });
 
   win.on('resize', updateViewBounds);
-  // 트레이로 숨겼다 다시 열 때 뷰가 안 그려지는 문제: 자식 뷰를 재부착해 강제 재composite
-  win.on('show', () => {
+  // 트레이로 숨겼다 다시 열 때 뷰가 안 그려지는 문제:
+  // 자식 뷰 재부착 + 창 크기를 1px 흔들어 창 전체를 강제 재합성시킨다.
+  const wakeWindow = () => {
     if (!win || !view) return;
     win.contentView.removeChildView(view);
     win.contentView.addChildView(view);
     updateViewBounds();
-    setTimeout(() => view?.webContents.invalidate(), 60);
-  });
+    setTimeout(() => {
+      if (!win || !view) return;
+      const b = win.getBounds();
+      win.setBounds({ x: b.x, y: b.y, width: b.width + 1, height: b.height });
+      win.setBounds(b);
+      updateViewBounds();
+      view.webContents.invalidate();
+      win.webContents.invalidate();
+    }, 60);
+  };
+  win.on('show', wakeWindow);
+  win.on('restore', wakeWindow);
   win.on('maximize', () => win?.webContents.send('meari:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('meari:maximized', false));
 
@@ -197,12 +208,18 @@ function createTray(): void {
   const img = nativeImage.createFromPath(join(process.resourcesPath, 'icon.png'));
   tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img);
   tray.setToolTip('메아리');
+  const showWindow = () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  };
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '열기', click: () => win?.show() },
+    { label: '열기', click: showWindow },
     { type: 'separator' },
     { label: '종료', click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.on('double-click', () => win?.show());
+  tray.on('double-click', showWindow);
 }
 
 app.whenReady().then(async () => {
