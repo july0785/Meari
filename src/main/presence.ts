@@ -13,9 +13,10 @@ let lastRepeat = '';  // 마지막 전송 시점의 반복 모드. 뱃지 갱신
 // 저장소에 올려 둔 상태 뱃지 아이콘 (공개 https 라 디스코드가 그대로 가져간다)
 const ICON_BASE = 'https://raw.githubusercontent.com/july0785/Meari/main/resources';
 const COVER_FALLBACK = `${ICON_BASE}/icon.png`;       // 앨범 이미지가 없을 때
-const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png`;
-const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png`;
-const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png`;
+// ?v= 는 디스코드 이미지 캐시 우회용 — 아이콘을 갈아끼우면 숫자를 올릴 것
+const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png?v=2`;
+const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png?v=2`;
+const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png?v=2`;
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
 
 export async function initPresence(clientId: string): Promise<void> {
