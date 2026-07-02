@@ -1,4 +1,5 @@
 import { Client } from '@xhayper/discord-rpc';
+import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
 let client: Client | null = null;
@@ -6,8 +7,10 @@ let ready = false;
 let lastTrack = '';
 let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치 어긋남 감지용.
 let lastPaused = false;
+let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
 
 export async function initPresence(clientId: string): Promise<void> {
+  rawTitleMode = Boolean(loadConfig().rawTitle);
   client = new Client({ clientId });
   client.on('ready', () => { ready = true; });
   client.on('disconnected', () => { ready = false; scheduleReconnect(); });
@@ -31,6 +34,7 @@ function scheduleReconnect(): void {
 // "가수명과 겹칠 때만" 지워서, 곡명이 잘려 나가는 사고를 막는다.
 function cleanTitle(raw: string, artist: string): string {
   const original = (raw || '').trim();
+  if (rawTitleMode) return original; // 정리 끔 — 원제목 그대로
   let t = original;
 
   // [태그]·【태그】 제거 (앞쪽 연속 태그 + 어디에 있든 【COVER】【MV】 류)
@@ -59,7 +63,9 @@ function cleanTitle(raw: string, artist: string): string {
     if (a.length >= 2) {
       const noArtist = kept.filter((p) => {
         const np = norm(p);
-        return !(np.length >= 2 && (a.includes(np) || np.includes(a)));
+        // 조각 ⊆ 가수명은 안전. 가수명 ⊆ 조각은 짧은 가수명(IU 등)이 제목에
+        // 우연히 들어가는 오인이 있어 가수명이 5자 이상일 때만 적용.
+        return !(np.length >= 2 && (a.includes(np) || (a.length >= 5 && np.includes(a))));
       });
       if (noArtist.length > 0) kept = noArtist;
     }
@@ -135,7 +141,8 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
     details: title,
     state: artist,
     largeImageKey: coverImage(np.cover) ?? 'logo', // 정사각 보정된 URL; 없으면 업로드자산 'logo'
-    largeImageText: pad2((np.album || cleanTitle(np.title, np.artist)).slice(0, 128)),
+    // 호버 텍스트에는 원제목을 보존 — 제목 정리가 과했더라도 전체 정보가 남는다
+    largeImageText: pad2((np.album || np.title).slice(0, 128)),
     smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
     smallImageText: np.paused ? '일시정지' : undefined,
     // 재생 중일 때만 진행 바(타임스탬프). 일시정지 땐 곡만 보여 주고 바는 멈춘다.
