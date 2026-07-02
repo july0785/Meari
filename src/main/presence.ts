@@ -7,7 +7,7 @@ let ready = false;
 let lastTrack = '';
 let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치 어긋남 감지용.
 let lastPaused = false;
-let lastSentAt = 0;   // 마지막 전송 시각(ms). 일시정지 중 진행바 고정 갱신 주기용.
+let lastElapsed = 0;  // 마지막 전송 시점의 재생위치(초). 일시정지 중 탐색 감지용.
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
 
 export async function initPresence(clientId: string): Promise<void> {
@@ -121,7 +121,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       lastTrack = '';
       lastStart = 0;
       lastPaused = false;
-      lastSentAt = 0;
+      lastElapsed = 0;
       await client.user.clearActivity().catch(() => {});
     }
     return;
@@ -138,14 +138,13 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   const trackChanged = track !== lastTrack;
   const pausedChanged = np.paused !== lastPaused;
   const drifted = !np.paused && Math.abs(start - lastStart) > 5000;
-  // 일시정지 중에는 디스코드가 바를 계속 굴리므로, 주기적으로 멈춘 위치를
-  // 다시 보내 바를 그 자리에 고정한다. (속도제한 5회/20초를 넘지 않게 6초 간격)
-  const pausedRefresh = np.paused && now - lastSentAt >= 6000;
-  if (!trackChanged && !pausedChanged && !drifted && !pausedRefresh) return;
+  // 일시정지 중 탐색(위치 이동)하면 표시 중인 멈춘 위치 글자를 갱신
+  const pausedSeeked = np.paused && Math.abs(np.elapsed - lastElapsed) > 3;
+  if (!trackChanged && !pausedChanged && !drifted && !pausedSeeked) return;
 
   lastTrack = track;
   lastPaused = np.paused;
-  lastSentAt = now;
+  lastElapsed = np.elapsed;
   if (!np.paused) lastStart = start;
 
   // 디스코드는 details/state 가 2자 미만이면 거부한다 → 짧으면 여백으로 채움
@@ -153,19 +152,35 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   const title = pad2(cleanTitle(np.title, np.artist).slice(0, 128));
   const artist = pad2((np.artist || 'YouTube Music').slice(0, 128));
 
+  // 일시정지: 디스코드 진행바는 멈출 수 없다(항상 클라이언트 시계로 굴러가고,
+  // "정지" 신호 자체가 API 에 없음 — 스포티파이도 일시정지하면 활동이 사라짐).
+  // 그래서 바 대신 멈춘 위치를 글자로 고정 표시한다. 예: 가수 · ⏸ 1:23 / 4:20
+  const fmtTime = (sec: number): string => {
+    const s = Math.max(0, Math.floor(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor(s / 60) % 60;
+    const ss = String(s % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+  };
+  const state = np.paused
+    ? (hasDuration
+        ? `${artist} · ⏸ ${fmtTime(np.elapsed)} / ${fmtTime(np.duration)}`
+        : `${artist} · ⏸ 일시정지`
+      ).slice(0, 128)
+    : artist;
+
   const activity = {
     type: 2, // Listening — 디스코드 판본에 따라 'Playing' 으로 보일 수 있음(정상)
     details: title,
-    state: artist,
+    state,
     largeImageKey: coverImage(np.cover) ?? 'logo', // 정사각 보정된 URL; 없으면 업로드자산 'logo'
     // 호버 텍스트에는 원제목을 보존 — 제목 정리가 과했더라도 전체 정보가 남는다
     largeImageText: pad2((np.album || np.title).slice(0, 128)),
     smallImageKey: 'logo',             // 소형이미지는 URL 불가 → 자산키
     smallImageText: np.paused ? '일시정지' : undefined,
-    // 진행 바는 항상 표시. 일시정지 중에는 elapsed 가 변하지 않으므로
-    // 위의 주기적 재전송(pausedRefresh)이 바를 멈춘 위치에 붙들어 둔다.
-    startTimestamp: start,
-    endTimestamp: hasDuration
+    // 진행 바(타임스탬프)는 재생 중일 때만. 일시정지 중엔 위의 state 글자가 위치를 보여 준다.
+    startTimestamp: np.paused ? undefined : start,
+    endTimestamp: (!np.paused && hasDuration)
       ? Math.floor(now + (np.duration - np.elapsed) * 1000)
       : undefined,
   };
@@ -180,7 +195,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       // 그래도 실패 → 상태를 되돌려 다음 폴링에서 다시 시도 (이전 곡에 멈추는 것 방지)
       lastTrack = '';
       lastStart = 0;
-      lastSentAt = 0;
+      lastElapsed = 0;
     }
   }
 }
