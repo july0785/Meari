@@ -24,6 +24,7 @@ export async function initPresence(clientId: string): Promise<void> {
   const cfg = loadConfig();
   rawTitleMode = Boolean(cfg.rawTitle);
   videoCoverMode = cfg.videoCover === 'crop' ? 'crop' : 'scenery';
+  void loadSceneryList(); // 사용자 사진 목록 (백그라운드 — 실패해도 폴백으로 동작)
   client = new Client({ clientId });
   client.on('ready', () => { ready = true; });
   client.on('disconnected', () => { ready = false; scheduleReconnect(); });
@@ -107,13 +108,31 @@ function cleanTitle(raw: string, artist: string): string {
 // 디스코드 largeImageKey 는 최대 256자. 넘으면 setActivity 전체가 실패하므로 반드시 지킨다.
 const MAX_IMAGE_URL = 256;
 
-// 곡별로 고정된 실사 풍경 사진 (Lorem Picsum, 시드 기반이라 같은 곡 = 항상 같은 사진).
-// picsum 은 302 리다이렉트를 주므로 weserv 로 감싸 직접 200 응답으로 만든다(디스코드 프록시 안전).
+// 사용자가 저장소 scenery/ 폴더에 넣어 둔 사진 목록 (시작 시 한 번 읽음).
+// 사진을 추가/교체하면 앱 재시작만으로 반영된다 — 재빌드 불필요.
+let sceneryList: string[] = [];
+
+async function loadSceneryList(): Promise<void> {
+  try {
+    const res = await fetch('https://api.github.com/repos/july0785/Meari/contents/scenery?ref=main');
+    if (!res.ok) return;
+    const items = (await res.json()) as Array<{ name?: string }>;
+    if (!Array.isArray(items)) return;
+    sceneryList = items
+      .filter((it) => typeof it.name === 'string' && /\.(png|jpe?g|webp)$/i.test(it.name))
+      .map((it) => `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}`)
+      .filter((u) => u.length <= MAX_IMAGE_URL);
+  } catch { /* 목록 실패 → 폴백 사용 */ }
+}
+
+// 곡별 고정 풍경 선택: scenery/ 폴더 사진 우선, 비어 있으면 임시로 Lorem Picsum 실사.
+// (picsum 은 302 리다이렉트를 주므로 weserv 로 감싸 직접 200 응답으로 만든다)
 function sceneryUrl(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
-  const key = Math.abs(h).toString(36);
-  return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${key}/600/600`)}`;
+  const n = Math.abs(h);
+  if (sceneryList.length > 0) return sceneryList[n % sceneryList.length];
+  return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
 // 영상(16:9) 썸네일은 정사각으로 만들기 애매하다: 크롭은 내용이 잘리고, 레터박스는 휑하다.
