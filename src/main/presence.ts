@@ -13,6 +13,7 @@ let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치
 let lastPaused = false;
 let lastElapsed = 0;  // 마지막 전송 시점의 재생위치(초). 일시정지 중 탐색 감지용.
 let lastRepeat = '';  // 마지막 전송 시점의 반복 모드. 뱃지 갱신 감지용.
+let lastHadDuration = false; // 곡 시작 직후 길이를 못 읽고 보냈다가 나중에 알게 되면 재전송
 
 // 저장소에 올려 둔 상태 뱃지 아이콘 (공개 https 라 디스코드가 그대로 가져간다)
 const ICON_BASE = 'https://raw.githubusercontent.com/july0785/Meari/main/resources';
@@ -272,15 +273,17 @@ function expandTags(tags: string[]): string[] {
   return [...out];
 }
 
-// 분위기 매칭: 파일명 태그가 곡 제목/가수에 들어 있는 사진을 우선 배정.
-// 가장 많이 일치하는 사진(들) 중 곡 해시로 하나 고정 선택. 일치가 없으면 null.
-function matchScenery(seed: string): string | null {
-  if (sceneryList.length === 0) return null;
-  const hay = seed.toLowerCase();
+// 분위기 매칭: 태그가 곡 텍스트에 들어 있는 사진을 우선 배정.
+// 가장 많이 일치하는 사진(들) 중에서 "곡 시드(제목|가수)" 해시로 하나를 고정 선택한다.
+// 주의: 선택 해시에 매칭 텍스트(hay)를 쓰면 같은 채널의 상용구 설명란 때문에
+// 모든 곡이 같은 사진으로 수렴한다 — 반드시 곡 시드로 뽑을 것.
+function matchScenery(hay: string, seed: string): string | null {
+  if (sceneryList.length === 0 || !hay) return null;
+  const h = hay.toLowerCase();
   let best: string[] = [];
   let bestScore = 0;
   for (const e of sceneryList) {
-    const score = e.tags.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0);
+    const score = e.tags.reduce((n, t) => n + (h.includes(t) ? 1 : 0), 0);
     if (score > bestScore) { bestScore = score; best = [e.url]; }
     else if (score === bestScore && score > 0) best.push(e.url);
   }
@@ -354,7 +357,7 @@ async function coverImage(cover: string | null, seed: string, primary: string, e
     const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (videoCoverMode !== 'crop') {
       // 분위기 매칭 2단계: ① 제목·가수·앨범(정확) → ② 영상 키워드·설명란 가사(폭넓음)
-      const mood = matchScenery(primary) ?? matchScenery(extra);
+      const mood = matchScenery(primary, seed) ?? matchScenery(extra, seed);
       if (mood) return mood;
       if (videoCoverMode === 'scenery') return sceneryUrl(seed);
       // mix(자동): 글씨 있는 썸네일은 잘리면 훼손 → 풍경. 글씨 없으면 크롭 진행.
@@ -401,12 +404,14 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 일시정지 중 탐색(위치 이동)하면 표시 중인 멈춘 위치 글자를 갱신
   const pausedSeeked = np.paused && Math.abs(np.elapsed - lastElapsed) > 3;
   const repeatChanged = np.repeat !== lastRepeat;
-  if (!trackChanged && !pausedChanged && !drifted && !pausedSeeked && !repeatChanged) return;
+  const durationChanged = hasDuration !== lastHadDuration; // 총 길이를 뒤늦게 알게 된 경우 진행 바 복구
+  if (!trackChanged && !pausedChanged && !drifted && !pausedSeeked && !repeatChanged && !durationChanged) return;
 
   lastTrack = track;
   lastPaused = np.paused;
   lastElapsed = np.elapsed;
   lastRepeat = np.repeat;
+  lastHadDuration = hasDuration;
   if (!np.paused) lastStart = start;
 
   // 디스코드는 details/state 가 2자 미만이면 거부한다 → 짧으면 여백으로 채움
