@@ -14,13 +14,16 @@ let lastRepeat = '';  // 마지막 전송 시점의 반복 모드. 뱃지 갱신
 const ICON_BASE = 'https://raw.githubusercontent.com/july0785/Meari/main/resources';
 const COVER_FALLBACK = `${ICON_BASE}/icon.png`;       // 앨범 이미지가 없을 때
 // ?v= 는 디스코드 이미지 캐시 우회용 — 아이콘을 갈아끼우면 숫자를 올릴 것
-const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png?v=2`;
-const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png?v=2`;
-const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png?v=2`;
+const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png?v=3`;
+const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png?v=3`;
+const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png?v=3`;
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
+let videoCoverMode: 'scenery' | 'crop' = 'scenery'; // config.videoCover: 영상 썸네일 처리 방식
 
 export async function initPresence(clientId: string): Promise<void> {
-  rawTitleMode = Boolean(loadConfig().rawTitle);
+  const cfg = loadConfig();
+  rawTitleMode = Boolean(cfg.rawTitle);
+  videoCoverMode = cfg.videoCover === 'crop' ? 'crop' : 'scenery';
   client = new Client({ clientId });
   client.on('ready', () => { ready = true; });
   client.on('disconnected', () => { ready = false; scheduleReconnect(); });
@@ -104,18 +107,32 @@ function cleanTitle(raw: string, artist: string): string {
 // 디스코드 largeImageKey 는 최대 256자. 넘으면 setActivity 전체가 실패하므로 반드시 지킨다.
 const MAX_IMAGE_URL = 256;
 
-// 유튜브 영상 썸네일(16:9)은 디스코드가 정사각형으로 잘라 보기 나쁘므로,
-// 무료 이미지 CDN(weserv)으로 여백을 채워 정사각형으로 만든다.
-// 이때 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성한다
+// 곡별로 고정된 실사 풍경 사진 (Lorem Picsum, 시드 기반이라 같은 곡 = 항상 같은 사진).
+// picsum 은 302 리다이렉트를 주므로 weserv 로 감싸 직접 200 응답으로 만든다(디스코드 프록시 안전).
+function sceneryUrl(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  const key = Math.abs(h).toString(36);
+  return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${key}/600/600`)}`;
+}
+
+// 영상(16:9) 썸네일은 정사각으로 만들기 애매하다: 크롭은 내용이 잘리고, 레터박스는 휑하다.
+// 기본은 곡별 고정 풍경 이미지로 대체하고, config.videoCover='crop' 이면 스마트 크롭
+// (a=attention: 시각적으로 중요한 영역 중심)으로 자른다.
+// 크롭 시 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성
 // (안 그러면 인코딩 후 256자를 넘겨 활동 갱신이 통째로 실패한다).
 // 이미 정사각인 앨범 아트(googleusercontent 등)는 그대로 둔다.
-function coverImage(cover: string | null): string | null {
+function coverImage(cover: string | null, seed: string): string | null {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
+    if (videoCoverMode === 'scenery') return sceneryUrl(seed);
     const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
-    const bare = `i.ytimg.com/vi/${m[1]}/hqdefault.jpg`;
-    const url = `https://images.weserv.nl/?url=${encodeURIComponent(bare)}&w=600&h=600&fit=contain&cbg=0d1421`;
+    // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
+    // maxresdefault 를 쓰고, 없는 영상은 mqdefault(항상 존재)로 자동 대체
+    const primary = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/maxresdefault.jpg`);
+    const fallback = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/mqdefault.jpg`);
+    const url = `https://images.weserv.nl/?url=${primary}&default=${fallback}&w=600&h=600&fit=cover&a=attention`;
     return url.length <= MAX_IMAGE_URL ? url : null;
   }
   return cover.length <= MAX_IMAGE_URL ? cover : null;
@@ -193,7 +210,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
   // 원시 SET_ACTIVITY 요청을 직접 보낸다.
   const assets: Record<string, string> = {
-    large_image: coverImage(np.cover) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
+    large_image: coverImage(np.cover, track) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
   };
   // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
   if (np.album) assets.large_text = pad2(np.album.slice(0, 128));

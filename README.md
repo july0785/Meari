@@ -71,6 +71,7 @@ npm run dist:mac       # 맥 dmg → dist/
 | `discordClientId` | (없음) | 디스코드 애플리케이션 ID. 비워 두면 코드에 내장된 기본값을 사용합니다. |
 | `disableGpu` | `false` | 화면이 깜빡이는 환경에서만 `true`. GPU 가속을 꺼서 안정성을 얻는 대신 CPU 사용량이 크게 늘어납니다. |
 | `rawTitle` | `false` | `true` 면 제목 정리(태그·병기·번역 꼬리 제거)를 끄고 유튜브 원제목 그대로 표시합니다. |
+| `videoCover` | `"scenery"` | 영상(16:9) 썸네일 처리. `"scenery"` = 곡별 고정 풍경 이미지로 대체, `"crop"` = 스마트 크롭. |
 
 예시:
 
