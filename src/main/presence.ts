@@ -18,12 +18,12 @@ const BADGE_PAUSE = `${ICON_BASE}/badge-pause.png?v=3`;
 const BADGE_REPEAT = `${ICON_BASE}/badge-repeat.png?v=3`;
 const BADGE_REPEAT_ONE = `${ICON_BASE}/badge-repeat-one.png?v=3`;
 let rawTitleMode = false; // config.rawTitle: 제목 정리 끄기
-let videoCoverMode: 'scenery' | 'crop' = 'scenery'; // config.videoCover: 영상 썸네일 처리 방식
+let videoCoverMode: 'mix' | 'scenery' | 'crop' = 'mix'; // config.videoCover: 영상 썸네일 처리 방식
 
 export async function initPresence(clientId: string): Promise<void> {
   const cfg = loadConfig();
   rawTitleMode = Boolean(cfg.rawTitle);
-  videoCoverMode = cfg.videoCover === 'crop' ? 'crop' : 'scenery';
+  videoCoverMode = cfg.videoCover === 'crop' ? 'crop' : cfg.videoCover === 'scenery' ? 'scenery' : 'mix';
   void loadSceneryList(); // 사용자 사진 목록 (백그라운드 — 실패해도 폴백으로 동작)
   client = new Client({ clientId });
   client.on('ready', () => { ready = true; });
@@ -108,9 +108,16 @@ function cleanTitle(raw: string, artist: string): string {
 // 디스코드 largeImageKey 는 최대 256자. 넘으면 setActivity 전체가 실패하므로 반드시 지킨다.
 const MAX_IMAGE_URL = 256;
 
+function hashOf(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
 // 사용자가 저장소 scenery/ 폴더에 넣어 둔 사진 목록 (시작 시 한 번 읽음).
 // 사진을 추가/교체하면 앱 재시작만으로 반영된다 — 재빌드 불필요.
-let sceneryList: string[] = [];
+// 파일명 토큰은 분위기 태그로 쓴다 (예: "밤_평양야경.jpg" → 태그 [밤, 평양야경]).
+let sceneryList: Array<{ tags: string[]; url: string }> = [];
 
 async function loadSceneryList(): Promise<void> {
   try {
@@ -120,18 +127,35 @@ async function loadSceneryList(): Promise<void> {
     if (!Array.isArray(items)) return;
     sceneryList = items
       .filter((it) => typeof it.name === 'string' && /\.(png|jpe?g|webp)$/i.test(it.name))
-      .map((it) => `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}`)
-      .filter((u) => u.length <= MAX_IMAGE_URL);
+      .map((it) => {
+        const base = it.name!.replace(/\.[^.]+$/, '').toLowerCase();
+        const tags = base.split(/[-_\s]+/).filter((t) => t.length >= 2 || /[가-힣]/.test(t));
+        return { tags, url: `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}` };
+      })
+      .filter((e) => e.url.length <= MAX_IMAGE_URL);
   } catch { /* 목록 실패 → 폴백 사용 */ }
+}
+
+// 분위기 매칭: 파일명 태그가 곡 제목/가수에 들어 있는 사진을 우선 배정.
+// 가장 많이 일치하는 사진(들) 중 곡 해시로 하나 고정 선택. 일치가 없으면 null.
+function matchScenery(seed: string): string | null {
+  if (sceneryList.length === 0) return null;
+  const hay = seed.toLowerCase();
+  let best: string[] = [];
+  let bestScore = 0;
+  for (const e of sceneryList) {
+    const score = e.tags.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; best = [e.url]; }
+    else if (score === bestScore && score > 0) best.push(e.url);
+  }
+  return bestScore > 0 ? best[hashOf(seed) % best.length] : null;
 }
 
 // 곡별 고정 풍경 선택: scenery/ 폴더 사진 우선, 비어 있으면 임시로 Lorem Picsum 실사.
 // (picsum 은 302 리다이렉트를 주므로 weserv 로 감싸 직접 200 응답으로 만든다)
 function sceneryUrl(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
-  const n = Math.abs(h);
-  if (sceneryList.length > 0) return sceneryList[n % sceneryList.length];
+  const n = hashOf(seed);
+  if (sceneryList.length > 0) return sceneryList[n % sceneryList.length].url;
   return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
@@ -144,7 +168,14 @@ function sceneryUrl(seed: string): string {
 function coverImage(cover: string | null, seed: string): string | null {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
-    if (videoCoverMode === 'scenery') return sceneryUrl(seed);
+    if (videoCoverMode !== 'crop') {
+      // 분위기 태그가 맞는 사진이 있으면 모드와 무관하게 그 사진을 우선
+      const mood = matchScenery(seed);
+      if (mood) return mood;
+      if (videoCoverMode === 'scenery') return sceneryUrl(seed);
+      // mix: 곡 해시로 반은 풍경, 반은 스마트 크롭 (곡별 고정)
+      if (hashOf(seed) % 2 === 0) return sceneryUrl(seed);
+    }
     const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
     // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
