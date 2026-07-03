@@ -9,6 +9,7 @@ export interface NowPlaying {
   duration: number;
   paused: boolean;
   repeat: string; // '' | 'NONE' | 'ALL' | 'ONE' (유튜브뮤직 플레이어 바의 repeat-mode)
+  extra: string;  // 영상 키워드 + 설명란 앞부분(가사인 경우 많음) — 분위기 매칭 보조용
 }
 
 const READ_SCRIPT = `(() => {
@@ -47,6 +48,19 @@ const READ_SCRIPT = `(() => {
   const playerBar = document.querySelector('ytmusic-player-bar');
   const repeat = (playerBar && playerBar.getAttribute('repeat-mode')) || '';
 
+  // 분위기 매칭 보조: 영상 키워드 + 설명란 앞부분(가사가 실려 있는 경우가 많다)
+  let extra = '';
+  try {
+    const mp = document.getElementById('movie_player');
+    const pr = mp && mp.getPlayerResponse && mp.getPlayerResponse();
+    const vd = pr && pr.videoDetails;
+    if (vd) {
+      const kw = Array.isArray(vd.keywords) ? vd.keywords.join(' ') : '';
+      const ds = (vd.shortDescription || '').slice(0, 400);
+      extra = (kw + ' ' + ds).slice(0, 800);
+    }
+  } catch (e) { /* 무시 */ }
+
   let elapsed, duration;
   const p = window.__meariPos;
   if (v.paused) {
@@ -74,7 +88,8 @@ const READ_SCRIPT = `(() => {
     elapsed: elapsed,
     duration: duration,
     paused: v.paused,
-    repeat: repeat
+    repeat: repeat,
+    extra: extra
   };
 })()`;
 

@@ -125,31 +125,45 @@ let sceneryList: Array<{ tags: string[]; url: string }> = [];
 
 async function loadSceneryList(): Promise<void> {
   try {
-    const res = await fetch('https://api.github.com/repos/july0785/Meari/contents/scenery?ref=main');
+    // 하위 폴더까지 한 번에 읽기 위해 트리 API 사용 (scenery/밤/사진.jpg 식 분류 지원)
+    const res = await fetch('https://api.github.com/repos/july0785/Meari/git/trees/main?recursive=1');
     if (!res.ok) return;
-    const items = (await res.json()) as Array<{ name?: string }>;
-    if (!Array.isArray(items)) return;
-    sceneryList = items
-      .filter((it) => typeof it.name === 'string' && /\.(png|jpe?g|webp)$/i.test(it.name))
-      .map((it) => {
-        const base = it.name!.replace(/\.[^.]+$/, '').toLowerCase();
-        const tags = base.split(/[-_\s]+/).filter((t) => t.length >= 2 || /[가-힣]/.test(t));
-        return { tags: expandTags(tags), url: `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}` };
+    const data = (await res.json()) as { tree?: Array<{ path?: string; type?: string }> };
+    if (!Array.isArray(data.tree)) return;
+    sceneryList = data.tree
+      .filter((e) =>
+        e.type === 'blob' && typeof e.path === 'string' &&
+        e.path.startsWith('scenery/') && /\.(png|jpe?g|webp)$/i.test(e.path))
+      .map((e) => {
+        const rel = e.path!.slice('scenery/'.length);
+        const parts = rel.split('/');
+        const base = parts[parts.length - 1].replace(/\.[^.]+$/, '');
+        // 태그 = 중간 폴더 이름들 + 파일명 토큰들
+        const rawTags = [...parts.slice(0, -1), ...base.split(/[-_\s]+/)]
+          .map((t) => t.toLowerCase())
+          .filter((t) => t.length >= 2 || /[가-힣]/.test(t));
+        const url = `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${parts.map(encodeURIComponent).join('/')}`;
+        return { tags: expandTags(rawTags), url };
       })
       .filter((e) => e.url.length <= MAX_IMAGE_URL);
   } catch { /* 목록 실패 → 폴백 사용 */ }
 }
 
-// 태그 동의어: 파일명 태그가 곡 제목과 직접 안 겹쳐도 비슷한 분위기 낱말로 걸리게 한다
+// 분위기 어휘 사전: 폴더/파일명 태그가 곡 제목·가수·앨범과 직접 안 겹쳐도
+// 같은 분위기 낱말로 걸리게 한다. (한국 노래 제목은 주제어가 뚜렷해 사전 매칭이 잘 먹힌다)
 const TAG_SYNONYMS: Record<string, string[]> = {
-  '밤': ['밤', '야경', '새벽', '달빛', '별빛', 'night'],
-  '바다': ['바다', '파도', '항구', '뱃길', 'sea', 'ocean'],
-  '산': ['산', '백두', '금강', '봉우리', 'mountain'],
-  '꽃': ['꽃', '봄', '진달래', '목란', 'flower'],
-  '눈': ['눈', '겨울', '설경', 'winter', 'snow'],
-  '사랑': ['사랑', '그대', '연인', 'love'],
-  '조국': ['조국', '나라', '내나라', '고향', '어머니'],
-  '도시': ['도시', '거리', '평양', '려명', 'city'],
+  '밤': ['밤', '야경', '심야', '새벽', '달', '달빛', '별', '별빛', '저녁', '황혼', '불야성', 'night', 'moon', 'star'],
+  '낮': ['낮', '아침', '해돋이', '해빛', '햇살', '하늘', '노을', 'morning', 'sunset', 'sky'],
+  '바다': ['바다', '파도', '항구', '뱃길', '해안', '섬', '수평선', '갈매기', 'sea', 'ocean', 'wave'],
+  '산': ['산', '백두', '백두산', '금강', '금강산', '봉우리', '고지', '수림', 'mountain'],
+  '꽃': ['꽃', '봄', '진달래', '목란', '벚꽃', '꽃보라', '만발', 'flower', 'spring', 'blossom'],
+  '눈': ['눈', '겨울', '설경', '눈꽃', '눈보라', 'winter', 'snow'],
+  '비': ['비', '빗물', '장마', '비바람', '소나기', 'rain'],
+  '사랑': ['사랑', '그대', '연인', '정든', '마음속', 'love'],
+  '조국': ['조국', '나라', '내나라', '고향', '강산', '금수강산', '어머니조국', '내조국'],
+  '혁명': ['혁명', '진군', '열병', '투쟁', '결전', '포성', '총대', '승리', '장군', '원수', '수령', '당기', '붉은기'],
+  '도시': ['도시', '거리', '평양', '려명', '불빛', '광장', 'city'],
+  '흥겨움': ['아리랑', '명절', '축제', '경사', '잔치', '춤', '노래자랑'],
 };
 
 function expandTags(tags: string[]): string[] {
@@ -238,13 +252,13 @@ function thumbHasText(videoId: string): Promise<boolean> {
 // 크롭 시 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성
 // (안 그러면 인코딩 후 256자를 넘겨 활동 갱신이 통째로 실패한다).
 // 이미 정사각인 앨범 아트(googleusercontent 등)는 그대로 둔다.
-async function coverImage(cover: string | null, seed: string): Promise<string | null> {
+async function coverImage(cover: string | null, seed: string, primary: string, extra: string): Promise<string | null> {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
     const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (videoCoverMode !== 'crop') {
-      // 분위기 태그가 맞는 사진이 있으면 모드와 무관하게 그 사진을 우선
-      const mood = matchScenery(seed);
+      // 분위기 매칭 2단계: ① 제목·가수·앨범(정확) → ② 영상 키워드·설명란 가사(폭넓음)
+      const mood = matchScenery(primary) ?? matchScenery(extra);
       if (mood) return mood;
       if (videoCoverMode === 'scenery') return sceneryUrl(seed);
       // mix(자동): 글씨 있는 썸네일은 잘리면 훼손 → 풍경. 글씨 없으면 크롭 진행.
@@ -253,9 +267,9 @@ async function coverImage(cover: string | null, seed: string): Promise<string | 
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
     // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
     // maxresdefault 를 쓰고, 없는 영상은 mqdefault(항상 존재)로 자동 대체
-    const primary = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/maxresdefault.jpg`);
-    const fallback = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/mqdefault.jpg`);
-    const url = `https://images.weserv.nl/?url=${primary}&default=${fallback}&w=600&h=600&fit=cover&a=attention`;
+    const primaryThumb = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/maxresdefault.jpg`);
+    const fallbackThumb = encodeURIComponent(`i.ytimg.com/vi/${m[1]}/mqdefault.jpg`);
+    const url = `https://images.weserv.nl/?url=${primaryThumb}&default=${fallbackThumb}&w=600&h=600&fit=cover&a=attention`;
     return url.length <= MAX_IMAGE_URL ? url : null;
   }
   return cover.length <= MAX_IMAGE_URL ? cover : null;
@@ -333,7 +347,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
   // 원시 SET_ACTIVITY 요청을 직접 보낸다.
   const assets: Record<string, string> = {
-    large_image: (await coverImage(np.cover, track)) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
+    large_image: (await coverImage(np.cover, track, `${np.title} ${np.artist} ${np.album}`, np.extra || '')) ?? COVER_FALLBACK,
   };
   // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
   if (np.album) assets.large_text = pad2(np.album.slice(0, 128));
