@@ -1,4 +1,8 @@
 import { Client } from '@xhayper/discord-rpc';
+import { execFile } from 'node:child_process';
+import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
@@ -130,10 +134,32 @@ async function loadSceneryList(): Promise<void> {
       .map((it) => {
         const base = it.name!.replace(/\.[^.]+$/, '').toLowerCase();
         const tags = base.split(/[-_\s]+/).filter((t) => t.length >= 2 || /[가-힣]/.test(t));
-        return { tags, url: `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}` };
+        return { tags: expandTags(tags), url: `https://raw.githubusercontent.com/july0785/Meari/main/scenery/${encodeURIComponent(it.name!)}` };
       })
       .filter((e) => e.url.length <= MAX_IMAGE_URL);
   } catch { /* 목록 실패 → 폴백 사용 */ }
+}
+
+// 태그 동의어: 파일명 태그가 곡 제목과 직접 안 겹쳐도 비슷한 분위기 낱말로 걸리게 한다
+const TAG_SYNONYMS: Record<string, string[]> = {
+  '밤': ['밤', '야경', '새벽', '달빛', '별빛', 'night'],
+  '바다': ['바다', '파도', '항구', '뱃길', 'sea', 'ocean'],
+  '산': ['산', '백두', '금강', '봉우리', 'mountain'],
+  '꽃': ['꽃', '봄', '진달래', '목란', 'flower'],
+  '눈': ['눈', '겨울', '설경', 'winter', 'snow'],
+  '사랑': ['사랑', '그대', '연인', 'love'],
+  '조국': ['조국', '나라', '내나라', '고향', '어머니'],
+  '도시': ['도시', '거리', '평양', '려명', 'city'],
+};
+
+function expandTags(tags: string[]): string[] {
+  const out = new Set<string>(tags);
+  for (const t of tags) {
+    for (const words of Object.values(TAG_SYNONYMS)) {
+      if (words.includes(t)) words.forEach((w) => out.add(w));
+    }
+  }
+  return [...out];
 }
 
 // 분위기 매칭: 파일명 태그가 곡 제목/가수에 들어 있는 사진을 우선 배정.
@@ -159,24 +185,71 @@ function sceneryUrl(seed: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
+// 썸네일에 글씨가 있는지 윈도우 내장 OCR 로 판별한다 (곡별 1회, 결과 캐시).
+// 글씨가 있으면 크롭 시 훼손되므로 풍경으로, 없으면 크롭해도 안전하다.
+// 실패·비윈도우 환경은 보수적으로 "글씨 있음" 취급 → 풍경.
+const thumbTextCache = new Map<string, Promise<boolean>>();
+
+function ocrScriptPath(): string | null {
+  const candidates = [
+    join(process.resourcesPath ?? '', 'ocr-thumb.ps1'),          // 패키지본(extraResources)
+    join(__dirname, '../../resources/ocr-thumb.ps1'),            // 개발
+  ];
+  for (const p of candidates) {
+    try { if (existsSync(p)) return p; } catch { /* 다음 후보 */ }
+  }
+  return null;
+}
+
+function thumbHasText(videoId: string): Promise<boolean> {
+  const cached = thumbTextCache.get(videoId);
+  if (cached) return cached;
+  const p = (async (): Promise<boolean> => {
+    if (process.platform !== 'win32') return true;
+    const script = ocrScriptPath();
+    if (!script) return true;
+    const tmp = join(tmpdir(), `meari-thumb-${videoId}.jpg`);
+    try {
+      const res = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`);
+      if (!res.ok) return true;
+      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+      const text = await new Promise<string>((resolve) => {
+        execFile(
+          'powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, tmp],
+          { timeout: 15000, windowsHide: true },
+          (_err, stdout) => resolve(stdout ?? ''),
+        );
+      });
+      return text.replace(/\s/g, '').length >= 4; // 4자 이상 인식되면 글씨 있는 썸네일
+    } catch {
+      return true;
+    } finally {
+      try { unlinkSync(tmp); } catch { /* 무시 */ }
+    }
+  })();
+  thumbTextCache.set(videoId, p);
+  return p;
+}
+
 // 영상(16:9) 썸네일은 정사각으로 만들기 애매하다: 크롭은 내용이 잘리고, 레터박스는 휑하다.
-// 기본은 곡별 고정 풍경 이미지로 대체하고, config.videoCover='crop' 이면 스마트 크롭
-// (a=attention: 시각적으로 중요한 영역 중심)으로 자른다.
+// 기본(mix=자동): 분위기 태그 일치 → 풍경 / 글씨 있는 썸네일 → 풍경 / 글씨 없는 썸네일 → 스마트 크롭.
+// config.videoCover='scenery' 는 항상 풍경, 'crop' 은 항상 크롭.
 // 크롭 시 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성
 // (안 그러면 인코딩 후 256자를 넘겨 활동 갱신이 통째로 실패한다).
 // 이미 정사각인 앨범 아트(googleusercontent 등)는 그대로 둔다.
-function coverImage(cover: string | null, seed: string): string | null {
+async function coverImage(cover: string | null, seed: string): Promise<string | null> {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
+    const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (videoCoverMode !== 'crop') {
       // 분위기 태그가 맞는 사진이 있으면 모드와 무관하게 그 사진을 우선
       const mood = matchScenery(seed);
       if (mood) return mood;
       if (videoCoverMode === 'scenery') return sceneryUrl(seed);
-      // mix: 곡 해시로 반은 풍경, 반은 스마트 크롭 (곡별 고정)
-      if (hashOf(seed) % 2 === 0) return sceneryUrl(seed);
+      // mix(자동): 글씨 있는 썸네일은 잘리면 훼손 → 풍경. 글씨 없으면 크롭 진행.
+      if (!m || (await thumbHasText(m[1]))) return sceneryUrl(seed);
     }
-    const m = cover.match(/\/vi\/([^/?#]+)\//);
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
     // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
     // maxresdefault 를 쓰고, 없는 영상은 mqdefault(항상 존재)로 자동 대체
@@ -260,7 +333,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
   // 원시 SET_ACTIVITY 요청을 직접 보낸다.
   const assets: Record<string, string> = {
-    large_image: coverImage(np.cover, track) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
+    large_image: (await coverImage(np.cover, track)) ?? COVER_FALLBACK, // 정사각 보정 URL; 없으면 앱 로고
   };
   // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
   if (np.album) assets.large_text = pad2(np.album.slice(0, 128));
