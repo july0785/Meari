@@ -38,8 +38,15 @@
 - 파일을 추가/교체한 뒤 앱을 다시 시작하면 반영됩니다 (재빌드 불필요).
 - 이 폴더가 비어 있으면 임시로 무작위 실사 사진(Lorem Picsum)이 사용됩니다.
 
-## 라이선스 안내
+## 라이선스 안내 — 사진 재배포 금지
 
-**이 폴더의 사진들은 저장소의 MIT 라이선스 적용 대상이 아닙니다.**
-사진의 모든 권리는 각 저작권 보유자에게 있으며, 코드와 달리 자유로운 복제·수정·재배포가 허용되지 않습니다.
-포크하는 경우 이 폴더의 사진은 본인의 이미지로 교체해 주세요.
+**이 폴더의 사진들은 저장소의 MIT 라이선스 적용 대상이 아니며, 재배포가 금지됩니다.**
+
+- 사진의 모든 권리는 각 저작권 보유자에게 있습니다.
+- 이 폴더 밖으로의 **복제·수정·재배포·상업적 이용을 금지**합니다.
+- 사진은 오직 이 저장소의 메아리 앱이 아트를 표시하는 용도로만 제공됩니다.
+- 포크하는 경우 이 폴더의 사진을 **삭제하거나 본인의 이미지로 교체**해 주세요.
+
+> The photos in this folder are **NOT covered by the MIT license. Redistribution is prohibited.**
+> All rights belong to their respective copyright holders. If you fork this repository,
+> delete these photos or replace them with your own images.
