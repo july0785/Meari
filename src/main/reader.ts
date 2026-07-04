@@ -48,6 +48,13 @@ const READ_SCRIPT = `(() => {
   const playerBar = document.querySelector('ytmusic-player-bar');
   const repeat = (playerBar && playerBar.getAttribute('repeat-mode')) || '';
 
+  // 곡이 바뀌면 이전 곡의 위치 보고값을 즉시 폐기한다.
+  // (안 그러면 새 곡 시작 직후 최대 10초간 이전 곡의 시간·길이로 계산되는 버그)
+  if (window.__meariLastTitle !== title) {
+    window.__meariLastTitle = title;
+    window.__meariPos = null;
+  }
+
   // 분위기 매칭 보조: 영상 키워드 + 설명란 앞부분(가사가 실려 있는 경우가 많다)
   let extra = '';
   try {
