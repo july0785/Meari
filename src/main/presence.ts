@@ -165,7 +165,7 @@ const TAG_SYNONYMS: Record<string, string[]> = {
     '우수', '애가', '한숨', '시름', '근심', '걱정', '아픔', '아파', '상처', '흉터', '울음', '울며',
     '흐느껴', '통곡', '절망', '허무', '공허', '상실', '잊혀진', '떠나간', '떠나버린', '사라진',
     '작별', '송별', '비련', '실연', '미련', '후회', '회한', '저물어', '스산', '적적', '우울', '침울',
-    '처량', '구슬픈', '애절', '애잔', '무덤', '마지막', '최후',
+    '처량', '구슬픈', '애절', '애잔', '무덤', '마지막', '최후', '최종', '밤하늘',
     // 영어
     'night', 'moon', 'moonlight', 'midnight', 'star', 'starlight', 'dark', 'darkness', 'shadow',
     'lonely', 'alone', 'tears', 'cry', 'crying', 'sad', 'sorrow', 'grief', 'broken', 'regret',
@@ -187,6 +187,7 @@ const TAG_SYNONYMS: Record<string, string[]> = {
     '청춘', '젊음', '소년', '소녀', '어린이', '아이들', '꿈많은', '씩씩', '우렁찬',
     '개선', '영광', '영예', '자랑', '긍지', '보람', '찬가', '송가', '축원', '번영', '부강',
     '약동', '비약', '전진', '날개', '비상', '용기', '응원', '축복', '감사', '고마운', '천진', '순수',
+    '세상', '청년', '내나라', '내 나라', '푸른', '하늘', '기상', '나래',
     // 영어
     'day', 'daylight', 'morning', 'sunrise', 'sunshine', 'sunny', 'bright', 'happy', 'hope', 'smile',
     'friend', 'friendship', 'together', 'joy', 'glory', 'youth', 'young', 'cheer', 'thank',
