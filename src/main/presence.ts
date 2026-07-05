@@ -411,6 +411,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       lastPaused = false;
       lastElapsed = 0;
       lastRepeat = '';
+      lastHadDuration = false;
       await client.user.clearActivity().catch(() => {});
     }
     return;
