@@ -1,4 +1,5 @@
 import { Client } from '@xhayper/discord-rpc';
+import { nativeImage } from 'electron';
 import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
@@ -320,13 +321,61 @@ function sceneryUrl(seed: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
+// 썸네일이 "복잡한지"(글씨·화려한 그래픽) 앱 내부에서 판별한다 (곡별 1회, 결과 캐시).
+// 외부 프로세스(powershell 등)를 절대 띄우지 않는다 — nativeImage 로 픽셀만 분석.
+// 매끈한 사진은 크롭해도 예쁘고, 복잡한 이미지는 잘리면 훼손되므로 풍경으로 보낸다.
+// 실패·불확실은 보수적으로 "복잡함"(→풍경) 취급.
+const thumbBusyCache = new Map<string, Promise<boolean>>();
+
+// 글씨·복잡한 그래픽은 "밝기 급변(에지)이 폭의 22% 이상인 행"을 다수 만든다.
+// 그런 행이 전체 높이의 8% 이상이면 "복잡함"으로 본다. (실제 썸네일 실측 기반 문턱)
+function bitmapIsBusy(bgra: Buffer, width: number, height: number): boolean {
+  if (width < 8 || height < 8) return true;
+  const lum = (x: number, y: number): number => {
+    const i = (y * width + x) * 4;
+    return 0.114 * bgra[i] + 0.587 * bgra[i + 1] + 0.299 * bgra[i + 2];
+  };
+  let busyRows = 0;
+  for (let y = 0; y < height; y++) {
+    let transitions = 0;
+    let prev = lum(0, y);
+    for (let x = 1; x < width; x++) {
+      const cur = lum(x, y);
+      if (Math.abs(cur - prev) > 60) transitions++;
+      prev = cur;
+    }
+    if (transitions > width * 0.22) busyRows++;
+  }
+  return busyRows >= height * 0.08;
+}
+
+function thumbIsBusy(videoId: string): Promise<boolean> {
+  const cached = thumbBusyCache.get(videoId);
+  if (cached) return cached;
+  const p = (async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return true;
+      const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()));
+      if (img.isEmpty()) return true;
+      const small = img.resize({ width: 160, quality: 'good' });
+      const { width, height } = small.getSize();
+      return bitmapIsBusy(small.toBitmap(), width, height);
+    } catch {
+      return true;
+    }
+  })();
+  thumbBusyCache.set(videoId, p);
+  return p;
+}
+
 // 영상(16:9) 썸네일은 정사각으로 만들기 애매하다: 크롭은 내용이 잘리고, 레터박스는 휑하다.
-// 기본(mix): 분위기 태그가 맞으면 그 풍경, 아니면 풍경(사진이 큐레이션되어 있으므로).
+// 기본(mix): 분위기 태그가 맞으면 그 풍경 / 매끈한 사진 썸네일이면 스마트 크롭 / 복잡하면 풍경.
 // config.videoCover='scenery' 는 항상 풍경, 'crop' 은 항상 스마트 크롭.
 // 크롭 시 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성
 // (안 그러면 인코딩 후 256자를 넘겨 활동 갱신이 통째로 실패한다).
 // 이미 정사각인 앨범 아트(googleusercontent 등)는 그대로 둔다.
-function coverImage(cover: string | null, seed: string, primary: string, extra: string): string | null {
+async function coverImage(cover: string | null, seed: string, primary: string, extra: string): Promise<string | null> {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
     const m = cover.match(/\/vi\/([^/?#]+)\//);
@@ -334,7 +383,9 @@ function coverImage(cover: string | null, seed: string, primary: string, extra: 
       // 분위기 매칭 2단계: ① 제목·가수·앨범(정확) → ② 영상 키워드·설명란 가사(폭넓음)
       const mood = matchScenery(primary, seed) ?? matchScenery(extra, seed);
       if (mood) return mood;
-      return sceneryUrl(seed); // mix·scenery 모두 풍경으로
+      if (videoCoverMode === 'scenery') return sceneryUrl(seed);
+      // mix: 매끈한 사진 썸네일이면 크롭, 복잡하면(글씨·그래픽) 풍경
+      if (!m || (await thumbIsBusy(m[1]))) return sceneryUrl(seed);
     }
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
     // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
@@ -422,7 +473,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
   // 원시 SET_ACTIVITY 요청을 직접 보낸다.
   const assets: Record<string, string> = {
-    large_image: coverImage(np.cover, track, `${np.title} ${np.artist} ${np.album}`, np.extra || '') ?? COVER_FALLBACK,
+    large_image: (await coverImage(np.cover, track, `${np.title} ${np.artist} ${np.album}`, np.extra || '')) ?? COVER_FALLBACK,
   };
   // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
   if (np.album) assets.large_text = pad2(np.album.slice(0, 128));
