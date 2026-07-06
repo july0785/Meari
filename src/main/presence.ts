@@ -1,8 +1,5 @@
 import { Client } from '@xhayper/discord-rpc';
-import { execFile } from 'node:child_process';
-import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { nativeImage } from 'electron';
 import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
@@ -324,47 +321,49 @@ function sceneryUrl(seed: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
-// 썸네일에 글씨가 있는지 윈도우 내장 OCR 로 판별한다 (곡별 1회, 결과 캐시).
-// 글씨가 있으면 크롭 시 훼손되므로 풍경으로, 없으면 크롭해도 안전하다.
-// 실패·비윈도우 환경은 보수적으로 "글씨 있음" 취급 → 풍경.
+// 썸네일에 큰 글씨(제목 텍스트)가 얹혀 있는지 앱 내부에서 판별한다 (곡별 1회, 결과 캐시).
+// 외부 프로세스(powershell 등)를 절대 띄우지 않는다 — nativeImage 로 픽셀만 분석.
+// 글씨가 있으면 크롭 시 훼손되므로 풍경으로, 없으면 크롭해도 안전하다. 불확실하면 풍경(보수적).
 const thumbTextCache = new Map<string, Promise<boolean>>();
 
-function ocrScriptPath(): string | null {
-  const candidates = [
-    join(process.resourcesPath ?? '', 'ocr-thumb.ps1'),          // 패키지본(extraResources)
-    join(__dirname, '../../resources/ocr-thumb.ps1'),            // 개발
-  ];
-  for (const p of candidates) {
-    try { if (existsSync(p)) return p; } catch { /* 다음 후보 */ }
+// 얹힌 글씨는 사진과 달리 "밝기 급변(에지)이 밀집된 가로 띠"를 만든다.
+// 그런 띠가 이미지 세로의 일정 비율 이상이면 글씨로 판정한다.
+function bitmapHasTextBand(bgra: Buffer, width: number, height: number): boolean {
+  if (width < 8 || height < 8) return false;
+  const lum = (x: number, y: number): number => {
+    const i = (y * width + x) * 4;
+    return 0.114 * bgra[i] + 0.587 * bgra[i + 1] + 0.299 * bgra[i + 2];
+  };
+  let busyRows = 0;
+  for (let y = 0; y < height; y++) {
+    let transitions = 0;
+    let prev = lum(0, y);
+    for (let x = 1; x < width; x++) {
+      const cur = lum(x, y);
+      if (Math.abs(cur - prev) > 60) transitions++;
+      prev = cur;
+    }
+    // 가로 급변이 폭의 22% 이상인 행 = 글자 획이 늘어선 행
+    if (transitions > width * 0.22) busyRows++;
   }
-  return null;
+  // 그런 행이 전체 높이의 10% 이상 = 제목 텍스트 띠가 있음(글씨를 크롭하는 사고 방지 위해 보수적).
+  return busyRows >= height * 0.10;
 }
 
 function thumbHasText(videoId: string): Promise<boolean> {
   const cached = thumbTextCache.get(videoId);
   if (cached) return cached;
   const p = (async (): Promise<boolean> => {
-    if (process.platform !== 'win32') return true;
-    const script = ocrScriptPath();
-    if (!script) return true;
-    const tmp = join(tmpdir(), `meari-thumb-${videoId}.jpg`);
     try {
-      const res = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`);
-      if (!res.ok) return true;
-      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
-      const text = await new Promise<string>((resolve) => {
-        execFile(
-          'powershell.exe',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, tmp],
-          { timeout: 15000, windowsHide: true },
-          (_err, stdout) => resolve(stdout ?? ''),
-        );
-      });
-      return text.replace(/\s/g, '').length >= 4; // 4자 이상 인식되면 글씨 있는 썸네일
+      const res = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return true; // 못 받으면 보수적으로 풍경
+      const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()));
+      if (img.isEmpty()) return true;
+      const small = img.resize({ width: 160, quality: 'good' });
+      const { width, height } = small.getSize();
+      return bitmapHasTextBand(small.toBitmap(), width, height);
     } catch {
       return true;
-    } finally {
-      try { unlinkSync(tmp); } catch { /* 무시 */ }
     }
   })();
   thumbTextCache.set(videoId, p);
