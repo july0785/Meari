@@ -1,5 +1,4 @@
 import { Client } from '@xhayper/discord-rpc';
-import { nativeImage } from 'electron';
 import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
@@ -321,62 +320,13 @@ function sceneryUrl(seed: string): string {
   return `https://images.weserv.nl/?url=${encodeURIComponent(`picsum.photos/seed/meari-${n.toString(36)}/600/600`)}`;
 }
 
-// 썸네일에 큰 글씨(제목 텍스트)가 얹혀 있는지 앱 내부에서 판별한다 (곡별 1회, 결과 캐시).
-// 외부 프로세스(powershell 등)를 절대 띄우지 않는다 — nativeImage 로 픽셀만 분석.
-// 글씨가 있으면 크롭 시 훼손되므로 풍경으로, 없으면 크롭해도 안전하다. 불확실하면 풍경(보수적).
-const thumbTextCache = new Map<string, Promise<boolean>>();
-
-// 얹힌 글씨는 사진과 달리 "밝기 급변(에지)이 밀집된 가로 띠"를 만든다.
-// 그런 띠가 이미지 세로의 일정 비율 이상이면 글씨로 판정한다.
-function bitmapHasTextBand(bgra: Buffer, width: number, height: number): boolean {
-  if (width < 8 || height < 8) return false;
-  const lum = (x: number, y: number): number => {
-    const i = (y * width + x) * 4;
-    return 0.114 * bgra[i] + 0.587 * bgra[i + 1] + 0.299 * bgra[i + 2];
-  };
-  let busyRows = 0;
-  for (let y = 0; y < height; y++) {
-    let transitions = 0;
-    let prev = lum(0, y);
-    for (let x = 1; x < width; x++) {
-      const cur = lum(x, y);
-      if (Math.abs(cur - prev) > 60) transitions++;
-      prev = cur;
-    }
-    // 가로 급변이 폭의 22% 이상인 행 = 글자 획이 늘어선 행
-    if (transitions > width * 0.22) busyRows++;
-  }
-  // 그런 행이 전체 높이의 10% 이상 = 제목 텍스트 띠가 있음(글씨를 크롭하는 사고 방지 위해 보수적).
-  return busyRows >= height * 0.10;
-}
-
-function thumbHasText(videoId: string): Promise<boolean> {
-  const cached = thumbTextCache.get(videoId);
-  if (cached) return cached;
-  const p = (async (): Promise<boolean> => {
-    try {
-      const res = await fetch(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) return true; // 못 받으면 보수적으로 풍경
-      const img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()));
-      if (img.isEmpty()) return true;
-      const small = img.resize({ width: 160, quality: 'good' });
-      const { width, height } = small.getSize();
-      return bitmapHasTextBand(small.toBitmap(), width, height);
-    } catch {
-      return true;
-    }
-  })();
-  thumbTextCache.set(videoId, p);
-  return p;
-}
-
 // 영상(16:9) 썸네일은 정사각으로 만들기 애매하다: 크롭은 내용이 잘리고, 레터박스는 휑하다.
-// 기본(mix=자동): 분위기 태그 일치 → 풍경 / 글씨 있는 썸네일 → 풍경 / 글씨 없는 썸네일 → 스마트 크롭.
-// config.videoCover='scenery' 는 항상 풍경, 'crop' 은 항상 크롭.
+// 기본(mix): 분위기 태그가 맞으면 그 풍경, 아니면 풍경(사진이 큐레이션되어 있으므로).
+// config.videoCover='scenery' 는 항상 풍경, 'crop' 은 항상 스마트 크롭.
 // 크롭 시 썸네일 URL 의 긴 쿼리(?sqp=...)는 버리고 영상 ID 기반의 짧은 표준 URL 로 재구성
 // (안 그러면 인코딩 후 256자를 넘겨 활동 갱신이 통째로 실패한다).
 // 이미 정사각인 앨범 아트(googleusercontent 등)는 그대로 둔다.
-async function coverImage(cover: string | null, seed: string, primary: string, extra: string): Promise<string | null> {
+function coverImage(cover: string | null, seed: string, primary: string, extra: string): string | null {
   if (!cover) return null;
   if (/ytimg\.com|\/vi\//.test(cover)) {
     const m = cover.match(/\/vi\/([^/?#]+)\//);
@@ -384,9 +334,7 @@ async function coverImage(cover: string | null, seed: string, primary: string, e
       // 분위기 매칭 2단계: ① 제목·가수·앨범(정확) → ② 영상 키워드·설명란 가사(폭넓음)
       const mood = matchScenery(primary, seed) ?? matchScenery(extra, seed);
       if (mood) return mood;
-      if (videoCoverMode === 'scenery') return sceneryUrl(seed);
-      // mix(자동): 글씨 있는 썸네일은 잘리면 훼손 → 풍경. 글씨 없으면 크롭 진행.
-      if (!m || (await thumbHasText(m[1]))) return sceneryUrl(seed);
+      return sceneryUrl(seed); // mix·scenery 모두 풍경으로
     }
     if (!m) return null; // 영상 ID를 못 찾으면 로고로 대체
     // hqdefault 는 4:3 이라 검은 띠가 이미지에 구워져 있음 → 진짜 16:9 인
@@ -474,7 +422,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   // 라이브러리의 setActivity 는 신형 필드(status_display_type)를 걸러내므로
   // 원시 SET_ACTIVITY 요청을 직접 보낸다.
   const assets: Record<string, string> = {
-    large_image: (await coverImage(np.cover, track, `${np.title} ${np.artist} ${np.album}`, np.extra || '')) ?? COVER_FALLBACK,
+    large_image: coverImage(np.cover, track, `${np.title} ${np.artist} ${np.album}`, np.extra || '') ?? COVER_FALLBACK,
   };
   // 앨범명이 있을 때만 표시 — 없으면 칸 자체를 비운다 (제목으로 돌려막지 않음)
   if (np.album) assets.large_text = pad2(np.album.slice(0, 128));
