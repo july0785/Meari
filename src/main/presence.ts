@@ -184,7 +184,7 @@ const TAG_SYNONYMS: Record<string, string[]> = {
     '청춘', '젊음', '소년', '소녀', '어린이', '아이들', '꿈많은', '씩씩', '우렁찬',
     '개선', '영광', '영예', '자랑', '긍지', '보람', '찬가', '송가', '축원', '번영', '부강',
     '약동', '비약', '전진', '날개', '비상', '용기', '응원', '축복', '감사', '고마운', '천진', '순수',
-    '세상', '청년', '내나라', '내 나라', '푸른', '하늘', '기상', '나래',
+    '세상', '청년', '내나라', '내 나라', '푸른', '하늘', '기상', '나래', '황금', '금빛',
     // 영어
     'day', 'daylight', 'morning', 'sunrise', 'sunshine', 'sunny', 'bright', 'happy', 'hope', 'smile',
     'friend', 'friendship', 'together', 'joy', 'glory', 'youth', 'young', 'cheer', 'thank',
@@ -217,6 +217,7 @@ const TAG_SYNONYMS: Record<string, string[]> = {
     '자연물', '자연', '강', '강변', '냇가', '시냇물', '호수', '들', '들판', '벌판', '초원', '숲', '수림',
     '폭포', '바위', '계곡', '언덕', '밭', '논밭', '시골', '전원', '농촌', '농사', '농장', '과수원',
     '목장', '온실', '트랙터', '수확', '저수지', '물길',
+    '나무', '수목', '가로수', '능금', '사과', '과일', '열매', '심었', '심으니', '가꾸',
     'nature', 'river', 'lake', 'forest', 'field', 'meadow', 'valley', 'hill', 'farm',
     '川', '森', '湖', '野原', '草原', '谷',
     '시내물', '포전', '남새', '가을걷이', '협동농장', '뜨락또르',
@@ -296,6 +297,13 @@ function expandTags(tags: string[]): string[] {
   return [...out];
 }
 
+// 한 글자 한글 태그(별·달·눈·비·들 …)는 다른 낱말 속 글자에 오인 매칭된다
+// (새별→별, 눈물→눈, 아이들→들). 단독으로 놓였을 때만 인정한다.
+function textHasTag(h: string, t: string): boolean {
+  if (t.length >= 2 || !/[가-힣]/.test(t)) return h.includes(t);
+  return new RegExp(`(^|[^가-힣])${t}($|[^가-힣])`).test(h);
+}
+
 // 분위기 매칭: 태그가 곡 텍스트에 들어 있는 사진을 우선 배정.
 // 가장 많이 일치하는 사진(들) 중에서 "곡 시드(제목|가수)" 해시로 하나를 고정 선택한다.
 // 주의: 선택 해시에 매칭 텍스트(hay)를 쓰면 같은 채널의 상용구 설명란 때문에
@@ -306,7 +314,7 @@ function matchScenery(hay: string, seed: string): string | null {
   let best: string[] = [];
   let bestScore = 0;
   for (const e of sceneryList) {
-    const score = e.tags.reduce((n, t) => n + (h.includes(t) ? 1 : 0), 0);
+    const score = e.tags.reduce((n, t) => n + (textHasTag(h, t) ? 1 : 0), 0);
     if (score > bestScore) { bestScore = score; best = [e.url]; }
     else if (score === bestScore && score > 0) best.push(e.url);
   }
