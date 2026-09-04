@@ -1,10 +1,18 @@
 import { Client } from '@xhayper/discord-rpc';
 import { nativeImage } from 'electron';
+import net from 'node:net';
 import { loadConfig } from './config';
 import type { NowPlaying } from './reader';
 
-let client: Client | null = null;
-let ready = false;
+// 디스코드 연결. 안정판·PTB·Canary 가 동시에 켜져 있으면 파이프(discord-ipc-N)가 여러 개라,
+// 무작정 첫 파이프에 붙으면 엉뚱한 클라이언트(다른 계정)에 표시될 수 있다.
+// 그래서 파이프마다 핸드셰이크로 "어느 빌드·어느 계정"인지 읽은 뒤 골라서 붙는다.
+interface Conn { client: Client; ready: boolean; pipeId?: number; label: string }
+let conns: Conn[] = [];
+let appClientId = '';
+let discordTarget = 'auto';
+let connecting = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTrack = '';
 let lastStart = 0;    // 마지막으로 보낸 startTimestamp(ms). 재생위치 어긋남 감지용.
 let lastPaused = false;
@@ -26,23 +34,130 @@ export async function initPresence(clientId: string): Promise<void> {
   const cfg = loadConfig();
   rawTitleMode = Boolean(cfg.rawTitle);
   videoCoverMode = cfg.videoCover === 'crop' ? 'crop' : cfg.videoCover === 'scenery' ? 'scenery' : 'mix';
+  discordTarget = (cfg.discordTarget || 'auto').trim();
   void loadSceneryList(); // 사용자 사진 목록 (백그라운드 — 실패해도 폴백으로 동작)
-  client = new Client({ clientId });
-  client.on('ready', () => { ready = true; });
-  client.on('disconnected', () => { ready = false; scheduleReconnect(); });
+  appClientId = clientId;
   await connect();
 }
 
+interface FoundClient { pipeId: number; endpoint: string; username: string }
+
+// 파이프 하나에 핸드셰이크해서 READY 의 빌드(api_endpoint)·계정(user.username)을 읽는다.
+function probePipe(pipeId: number): Promise<FoundClient | null> {
+  return new Promise((resolve) => {
+    const path = process.platform === 'win32'
+      ? `\\\\?\\pipe\\discord-ipc-${pipeId}`
+      : `${process.env.XDG_RUNTIME_DIR || process.env.TMPDIR || '/tmp'}/discord-ipc-${pipeId}`;
+    let buf = Buffer.alloc(0);
+    let done = false;
+    const sock = net.connect(path);
+    const finish = (r: FoundClient | null): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish(null), 2000);
+    sock.on('connect', () => {
+      const json = Buffer.from(JSON.stringify({ v: 1, client_id: appClientId }));
+      const head = Buffer.alloc(8);
+      head.writeInt32LE(0, 0); // HANDSHAKE
+      head.writeInt32LE(json.length, 4);
+      sock.write(Buffer.concat([head, json]));
+    });
+    sock.on('error', () => finish(null));
+    sock.on('data', (d: Buffer) => {
+      buf = Buffer.concat([buf, d]);
+      if (buf.length < 8) return;
+      const len = buf.readInt32LE(4);
+      if (buf.length < 8 + len) return;
+      try {
+        const msg = JSON.parse(buf.subarray(8, 8 + len).toString('utf8'));
+        if (msg?.evt === 'READY') {
+          finish({
+            pipeId,
+            endpoint: String(msg.data?.config?.api_endpoint ?? ''),
+            username: String(msg.data?.user?.username ?? ''),
+          });
+          return;
+        }
+      } catch { /* 무시 */ }
+      finish(null);
+    });
+  });
+}
+
+async function findDiscordClients(): Promise<FoundClient[]> {
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => probePipe(i)));
+  return results.filter((r): r is FoundClient => r !== null);
+}
+
+// 빌드 우선순위: 안정판(0) > PTB(1) > Canary(2)
+const buildRank = (endpoint: string): number =>
+  endpoint.includes('canary') ? 2 : endpoint.includes('ptb') ? 1 : 0;
+
+// 설정(discordTarget)에 따라 붙을 클라이언트를 고른다.
+// 'auto' 는 안정판 우선으로 하나. 명시 지정(stable/ptb/canary/계정명)은 그 대상이 없으면
+// 다른 데 붙지 않고 기다린다 — 엉뚱한 계정에 표시되는 것보다 안 뜨는 편이 낫다.
+function chooseTargets(found: FoundClient[]): FoundClient[] {
+  if (found.length === 0) return [];
+  const t = discordTarget.toLowerCase();
+  if (t === 'all') return found;
+  const sorted = [...found].sort((a, b) => buildRank(a.endpoint) - buildRank(b.endpoint) || a.pipeId - b.pipeId);
+  if (t === 'stable' || t === 'ptb' || t === 'canary') {
+    const want = t === 'stable' ? 0 : t === 'ptb' ? 1 : 2;
+    const pick = sorted.find((f) => buildRank(f.endpoint) === want);
+    return pick ? [pick] : [];
+  }
+  if (t && t !== 'auto') {
+    const pick = sorted.find((f) => f.username.toLowerCase() === t);
+    return pick ? [pick] : [];
+  }
+  return [sorted[0]];
+}
+
+async function disconnectAll(): Promise<void> {
+  const old = conns;
+  conns = [];
+  await Promise.all(old.map((c) => c.client.destroy().catch(() => {})));
+}
+
 async function connect(): Promise<void> {
+  if (connecting) return;
+  connecting = true;
   try {
-    await client!.login();
-  } catch {
-    scheduleReconnect(); // 디스코드가 아직 안 켜졌을 수 있음
+    await disconnectAll();
+    const found = await findDiscordClients();
+    const targets = chooseTargets(found);
+    // 탐색이 아무것도 못 찾으면(비윈도우의 snap/flatpak 경로 등) 라이브러리 기본 탐색으로 폴백.
+    // 찾긴 했는데 지정한 대상이 아직 없으면 붙지 않고 기다린다.
+    const specs: Array<{ pipeId?: number; label: string }> =
+      targets.length > 0
+        ? targets.map((t) => ({ pipeId: t.pipeId, label: `${t.username} (${t.endpoint})` }))
+        : found.length === 0 ? [{ label: 'default' }] : [];
+    if (specs.length === 0) { scheduleReconnect(); return; }
+
+    for (const s of specs) {
+      const client = new Client({ clientId: appClientId, ...(s.pipeId !== undefined ? { pipeId: s.pipeId } : {}) });
+      const conn: Conn = { client, ready: false, pipeId: s.pipeId, label: s.label };
+      client.on('ready', () => { conn.ready = true; lastTrack = ''; }); // (재)연결 후 현재 곡을 다시 보내도록
+      client.on('disconnected', () => { conn.ready = false; scheduleReconnect(); });
+      conns.push(conn);
+      try { await client.login(); } catch { conn.ready = false; }
+    }
+    if (!conns.some((c) => c.ready)) scheduleReconnect(); // 디스코드가 아직 안 켜졌을 수 있음
+  } finally {
+    connecting = false;
   }
 }
 
 function scheduleReconnect(): void {
-  setTimeout(() => { if (!ready) connect(); }, 10_000);
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!conns.some((c) => c.ready)) void connect();
+  }, 10_000);
 }
 
 // 유튜브 제목에서 거추장스러운 부분을 덜어 진짜 제목만 남긴다(최선의 추정).
@@ -407,7 +522,9 @@ async function coverImage(cover: string | null, seed: string, primary: string, e
 }
 
 export async function updatePresence(np: NowPlaying | null): Promise<void> {
-  if (!client || !ready || !client.user) return;
+  // 연결·준비된 디스코드 클라이언트(들)에만 보낸다 (설정에 따라 하나 또는 전부)
+  const live = conns.filter((c) => c.ready && c.client.user);
+  if (live.length === 0) return;
 
   // 곡 정보 자체가 없을 때만 활동 제거 (일시정지는 유지 — 곡을 계속 보여 준다)
   if (!np || !np.title) {
@@ -418,7 +535,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
       lastElapsed = 0;
       lastRepeat = '';
       lastHadDuration = false;
-      await client.user.clearActivity().catch(() => {});
+      await Promise.all(live.map((c) => c.client.user!.clearActivity().catch(() => {})));
     }
     return;
   }
@@ -505,7 +622,7 @@ export async function updatePresence(np: NowPlaying | null): Promise<void> {
   }
 
   const send = (a: Record<string, unknown>) =>
-    client!.request('SET_ACTIVITY', { pid: process.pid, activity: a });
+    Promise.all(live.map((c) => c.client.request('SET_ACTIVITY', { pid: process.pid, activity: a })));
 
   try {
     await send(activity);
